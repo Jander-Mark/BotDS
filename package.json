@@ -1,0 +1,28 @@
+{
+  "name": "discord-bot-js",
+  "version": "1.0.0",
+  "description": "Bot do Discord convertido de Python para JavaScript com sistema modularizado",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node index.js",
+    "test": "node test-firebase.js",
+    "migrate": "node migrate-to-firebase.js migrate",
+    "backup": "node migrate-to-firebase.js backup"
+  },
+  "keywords": [
+    "discord",
+    "bot",
+    "javascript",
+    "modular"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "discord.js": "^14.14.1",
+    "firebase-admin": "^13.4.0"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}
