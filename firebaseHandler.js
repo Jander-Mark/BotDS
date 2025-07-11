@@ -1,27 +1,47 @@
 const admin = require("firebase-admin");
+const fs = require('fs');
+const path = require('path');
 
 // Configuração do Firebase Admin SDK
 let db = null;
 
 function initializeFirebase() {
+    // --- PASSO 1: Diagnóstico de Caminho ---
+    // Cria o caminho absoluto para o arquivo de chave. Isso nos mostra exatamente onde o Node.js está procurando.
+    const keyPath = path.resolve(__dirname, 'firebase-service-account.json');
+    console.log(`[DEBUG] Procurando pela chave do Firebase em: ${keyPath}`);
+
+    // --- PASSO 2: Diagnóstico de Existência do Arquivo ---
+    // Verifica se o arquivo existe no caminho esperado ANTES de tentar carregá-lo.
+    if (!fs.existsSync(keyPath)) {
+        console.error(`\n[ERRO CRÍTICO] O arquivo 'firebase-service-account.json' NÃO foi encontrado no caminho acima.`);
+        console.log("--> SOLUÇÃO: Verifique se o nome do arquivo está EXATAMENTE correto (tudo minúsculo) e se ele está na pasta principal do seu bot.\n");
+        console.log("Continuando com armazenamento local JSON...\n");
+        return false;
+    }
+
+    console.log(`[DEBUG] Arquivo de chave encontrado! Tentando inicializar a conexão com o Firebase...`);
+
+    // --- PASSO 3: Tentativa de Inicialização ---
     try {
-        // Verificar se já foi inicializado
+        const serviceAccount = require(keyPath);
+        
+        // Evita reinicializar o app se ele já estiver ativo
         if (admin.apps.length === 0) {
-            // Inicializar com credenciais do arquivo de serviço
-            // Você deve colocar o arquivo de credenciais na pasta do projeto
-            const serviceAccount = require("./firebase-service-account.json");
-            
             admin.initializeApp({
                 credential: admin.credential.cert(serviceAccount)
             });
         }
         
         db = admin.firestore();
-        console.log("Firebase inicializado com sucesso!");
+        console.log("\n✅ Firebase inicializado com sucesso! O bot está conectado ao banco de dados online.\n");
         return true;
+
     } catch (error) {
-        console.error("Erro ao inicializar Firebase:", error);
-        console.log("Continuando com armazenamento local JSON...");
+        console.error("\n❌ Erro ao inicializar Firebase!", error);
+        console.log("--> CAUSA PROVÁVEL: O arquivo de chave foi encontrado, mas seu conteúdo está corrompido, incompleto ou inválido.");
+        console.log("--> SOLUÇÃO: Tente gerar uma nova chave privada no site do Firebase e substitua o arquivo.\n");
+        console.log("Continuando com armazenamento local JSON...\n");
         return false;
     }
 }
@@ -114,10 +134,12 @@ async function queryDocuments(collectionName, field, operator, value) {
 // Função para incrementar um campo numérico
 async function incrementField(collectionName, documentId, field, incrementValue = 1) {
     try {
+        const docRef = getCollection(collectionName).doc(documentId);
         const increment = admin.firestore.FieldValue.increment(incrementValue);
-        await getCollection(collectionName).doc(documentId).update({
+        
+        await docRef.set({
             [field]: increment
-        });
+        }, { merge: true });
         return true;
     } catch (error) {
         console.error(`Erro ao incrementar campo ${field} do documento ${documentId}:`, error);
@@ -163,7 +185,6 @@ module.exports = {
     createBatch,
     commitBatch,
     getCollection,
-    // Exportar admin para casos especiais
-    admin
+    admin,
+    FieldValue: admin.firestore.FieldValue
 };
-
