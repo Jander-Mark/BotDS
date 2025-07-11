@@ -24,9 +24,7 @@ class ItemSelect {
             let label = `${itemData.name} - ${price.toLocaleString()} moedas`;
 
             if (itemKey === "moon") {
-                // Para o Firebase, precisamos carregar os dados de forma assíncrona
-                // Por enquanto, usamos o preço padrão
-                label = `${itemData.name} - ${price.toLocaleString()} moedas (preço dinâmico)`;
+                label = `${itemData.name} - Preço dinâmico`;
             }
 
             options.push({
@@ -57,14 +55,21 @@ class ItemSelect {
         
         const roleId = itemData.role_id;
 
+        if (!roleId || roleId === "0") {
+             await interaction.reply({ content: "❌ Ops! O ID deste cargo não está configurado. Avise um administrador!", ephemeral: true });
+            return;
+        }
+
         const role = interaction.guild.roles.cache.get(roleId);
         if (!role) {
-            await interaction.reply({ content: "❌ Ops! Este cargo não está configurado. Avise um administrador!", ephemeral: true });
+            await interaction.reply({ content: "❌ Ops! Este cargo não existe mais no servidor. Avise um administrador!", ephemeral: true });
             return;
         }
 
         if (itemKey === "moon") {
-            await this.handleMoonPurchase(interaction, itemData, userData, role);
+            // A instância da LojaView é necessária para chamar o método
+            const lojaView = new LojaView();
+            await lojaView.handleMoonPurchase(interaction, itemData, userData, role);
             return;
         }
 
@@ -99,97 +104,8 @@ class ItemSelect {
                 ephemeral: true 
             });
         } catch (error) {
-            await interaction.reply({ content: "❌ Eu não tenho permissão para adicionar este cargo!", ephemeral: true });
-        }
-    }
-
-    async handleMoonPurchase(interaction, itemData, userData, role) {
-        let shopData;
-        if (useFirebase()) {
-            shopData = await getUserDataAsync(config.SHOP_DATA_FILE, 'moon_data') || {};
-        } else {
-            shopData = carregarDados(config.SHOP_DATA_FILE);
-        }
-        
-        const price = shopData.moon_price || itemData.price;
-        const currentOwnerId = shopData.moon_owner_id;
-
-        if (currentOwnerId === interaction.user.id) {
-            await interaction.reply({ content: "❌ Você já é o dono do cargo Moon!", ephemeral: true });
-            return;
-        }
-
-        if (userData.carteira < price) {
-            await interaction.reply({ 
-                content: `❌ Você não tem moedas suficientes! O cargo Moon custa ${price.toLocaleString()} moedas.`, 
-                ephemeral: true 
-            });
-            return;
-        }
-
-        try {
-            // Remover cargo do dono anterior e reembolsar
-            if (currentOwnerId) {
-                const previousOwner = await interaction.guild.members.fetch(currentOwnerId).catch(() => null);
-                if (previousOwner) {
-                    await previousOwner.roles.remove(role, "Novo dono do cargo Moon");
-                    
-                    let previousOwnerData;
-                    if (useFirebase()) {
-                        previousOwnerData = await getUserEconomyDataAsync(currentOwnerId, config.ECONOMY_FILE);
-                    } else {
-                        previousOwnerData = getUserEconomyData(currentOwnerId, config.ECONOMY_FILE);
-                    }
-                    
-                    const reembolso = Math.floor(price / 2);
-                    previousOwnerData.carteira += reembolso;
-                    
-                    if (useFirebase()) {
-                        await setUserDataAsync(config.ECONOMY_FILE, currentOwnerId, previousOwnerData);
-                    } else {
-                        const economia = carregarDados(config.ECONOMY_FILE);
-                        economia[currentOwnerId.toString()] = previousOwnerData;
-                        salvarDados(config.ECONOMY_FILE, economia);
-                    }
-
-                    try {
-                        await previousOwner.send(`👑 O cargo Moon foi comprado! Você recebeu um reembolso de **${reembolso.toLocaleString()}** moedas furradas.`);
-                    } catch (error) {
-                        // Usuário pode ter DMs desabilitadas
-                    }
-                }
-            }
-
-            // Adicionar cargo ao novo dono
-            await interaction.member.roles.add(role, "Comprou o cargo Moon");
-            
-            // Atualizar economia do comprador
-            userData.carteira -= price;
-            if (useFirebase()) {
-                await setUserDataAsync(config.ECONOMY_FILE, interaction.user.id, userData);
-            } else {
-                const economia = carregarDados(config.ECONOMY_FILE);
-                economia[interaction.user.id.toString()] = userData;
-                salvarDados(config.ECONOMY_FILE, economia);
-            }
-            
-            // Atualizar dados da loja
-            shopData.moon_owner_id = interaction.user.id;
-            shopData.moon_price = price * 2;
-            
-            if (useFirebase()) {
-                await setUserDataAsync(config.SHOP_DATA_FILE, 'moon_data', shopData);
-            } else {
-                salvarDados(config.SHOP_DATA_FILE, shopData);
-            }
-
-            await interaction.reply({ 
-                content: `👑 Parabéns! Você é o novo dono do cargo **Moon**! O próximo preço será de ${shopData.moon_price.toLocaleString()} moedas.`, 
-                ephemeral: true 
-            });
-
-        } catch (error) {
-            await interaction.reply({ content: `Ocorreu um erro: ${error.message}`, ephemeral: true });
+            console.error("Erro ao adicionar cargo:", error);
+            await interaction.reply({ content: "❌ Eu não tenho permissão para adicionar este cargo! Verifique minhas permissões.", ephemeral: true });
         }
     }
 }
@@ -223,53 +139,166 @@ class LojaView {
         await interaction.reply({ content: "Escolha um item abaixo:", components: [row], ephemeral: true });
     }
 
-    async handleFuncoes(interaction) {
-        await this.showCategory(interaction, "funcoes");
+    handleFuncoes(interaction) { this.showCategory(interaction, "funcoes"); }
+    handleCosmeticos(interaction) { this.showCategory(interaction, "cosmeticos"); }
+    handleEspeciais(interaction) { this.showCategory(interaction, "especiais"); }
+
+    async handleMoonPurchase(interaction, itemData, userData, role) {
+        const userId = interaction.user.id;
+        let shopData;
+        
+        if (useFirebase()) {
+            shopData = await getUserDataAsync(config.SHOP_DATA_FILE, 'moon_data') || {};
+        } else {
+            shopData = (carregarDados(config.SHOP_DATA_FILE) || {}).moon_data || {};
+        }
+
+        const currentPrice = shopData.moon_price || itemData.price;
+        const currentOwnerId = shopData.moon_owner_id;
+        const lastPricePaid = shopData.moon_last_price || itemData.price;
+
+        if (currentOwnerId === userId) {
+            return interaction.reply({ content: "❌ Você já é o dono do cargo Moon!", ephemeral: true });
+        }
+
+        if (userData.carteira < currentPrice) {
+            return interaction.reply({
+                content: `❌ Você não tem moedas suficientes! O cargo Moon custa ${currentPrice.toLocaleString()} moedas.`,
+                ephemeral: true
+            });
+        }
+
+        await interaction.deferReply({ ephemeral: true });
+
+        try {
+            if (currentOwnerId) {
+                const previousOwner = await interaction.guild.members.fetch(currentOwnerId).catch(() => null);
+                if (previousOwner) {
+                    await previousOwner.roles.remove(role, "Novo dono do cargo Moon comprou o cargo.");
+
+                    let previousOwnerData;
+                    if (useFirebase()) {
+                        previousOwnerData = await getUserEconomyDataAsync(currentOwnerId, config.ECONOMY_FILE);
+                    } else {
+                        previousOwnerData = getUserEconomyData(currentOwnerId, config.ECONOMY_FILE);
+                    }
+                    
+                    previousOwnerData.carteira += lastPricePaid;
+
+                    if (useFirebase()) {
+                        await setUserDataAsync(config.ECONOMY_FILE, currentOwnerId, previousOwnerData);
+                    } else {
+                        const economia = carregarDados(config.ECONOMY_FILE);
+                        economia[currentOwnerId.toString()] = previousOwnerData;
+                        salvarDados(config.ECONOMY_FILE, economia);
+                    }
+
+                    await previousOwner.send(`👑 O cargo Moon foi comprado por outro membro! Você recebeu seu dinheiro de volta: **${lastPricePaid.toLocaleString()}** moedas furradas.`).catch(() => {});
+                }
+            }
+
+            userData.carteira -= currentPrice;
+            await interaction.member.roles.add(role, "Comprou o cargo Moon");
+            
+            if (useFirebase()) {
+                await setUserDataAsync(config.ECONOMY_FILE, userId, userData);
+            } else {
+                const economia = carregarDados(config.ECONOMY_FILE);
+                economia[userId.toString()] = userData;
+                salvarDados(config.ECONOMY_FILE, economia);
+            }
+
+            const newPrice = currentPrice * 2;
+            const updatedShopData = {
+                moon_owner_id: userId,
+                moon_price: newPrice,
+                moon_last_price: currentPrice
+            };
+            
+            if (useFirebase()) {
+                await setUserDataAsync(config.SHOP_DATA_FILE, 'moon_data', updatedShopData);
+            } else {
+                let shopJson = carregarDados(config.SHOP_DATA_FILE);
+                if(!shopJson) shopJson = {};
+                shopJson.moon_data = updatedShopData;
+                salvarDados(config.SHOP_DATA_FILE, shopJson);
+            }
+
+            await interaction.editReply({
+                content: `👑 Parabéns! Você é o novo dono do cargo **Moon**! O próximo preço será de ${newPrice.toLocaleString()} moedas.`
+            });
+
+            await this.updateShopMessage(interaction.client);
+
+        } catch (error) {
+            console.error("Erro ao comprar cargo Moon:", error);
+            await interaction.editReply({ content: `Ocorreu um erro durante a compra. Por favor, contate um administrador.` });
+        }
     }
 
-    async handleCosmeticos(interaction) {
-        await this.showCategory(interaction, "cosmeticos");
-    }
+    async updateShopMessage(client) {
+        // Para ser mais robusto, o ID do canal e da mensagem da loja poderiam ser salvos
+        // no config.js ou em um banco de dados após o comando /postar_loja ser usado.
+        // Esta é uma implementação de exemplo que busca em canais configurados.
+        for (const channelId of [config.LOG_CHANNEL_ID, "ID_DE_OUTRO_CANAL_AQUI"]) { // Adicione o ID do canal da loja aqui
+            try {
+                const channel = await client.channels.fetch(channelId);
+                if (channel && channel.isTextBased()) {
+                    const messages = await channel.messages.fetch({ limit: 50 });
+                    const shopMessage = messages.find(msg => 
+                        msg.author.id === client.user.id &&
+                        msg.embeds[0]?.title === "🛍️ Lojinha do Moon"
+                    );
 
-    async handleEspeciais(interaction) {
-        await this.showCategory(interaction, "especiais");
+                    if (shopMessage) {
+                        const newEmbed = await LojaView.createShopEmbed();
+                        await shopMessage.edit({ embeds: [newEmbed] });
+                        console.log(`Mensagem da loja atualizada no canal ${channel.name}`);
+                        return; // Para de procurar após encontrar e atualizar a primeira mensagem
+                    }
+                }
+            } catch (error) {
+                console.error(`Não foi possível atualizar a mensagem da loja no canal ${channelId}:`, error.message);
+            }
+        }
     }
 
     static async createShopEmbed() {
         const embed = new EmbedBuilder()
             .setTitle("🛍️ Lojinha do Moon")
             .setDescription(
-                "Aqui você poderá encontrar diferentes cargos que podem ou não (maioria não mesmo) te trazer algum benéfico dentro do servidor, esses cargos podem ser obtidos utilizando a moeda do servidor.\n\n" +
-                "Para comprar basta clicar nos Menus abaixo, pedidos que clique um por vez e aguarde o Bot te responder para que não tenha erro na sua utilização."
+                "Bem-vindo à Lojinha do Moon! Use suas moedas furradas para adquirir cargos exclusivos.\n\n" +
+                "Para comprar, clique em uma das categorias abaixo e selecione o item desejado. As compras são processadas individualmente."
             )
-            .setColor(0xAB8FE9);
+            .setColor(0xAB8FE9)
+            .setTimestamp()
+            .setFooter({ text: "A loja é atualizada automaticamente." });
 
         for (const [categoryKey, categoryData] of Object.entries(config.SHOP_CONFIG)) {
             let fieldValue = "";
-            
+
             for (const [itemKey, itemData] of Object.entries(categoryData.items)) {
-                const roleMention = itemData.role_id !== "0" ? `<@&${itemData.role_id}>` : `@${itemData.name}`;
+                const roleMention = itemData.role_id !== "0" ? `<@&${itemData.role_id}>` : `\`${itemData.name}\``;
                 
                 if (itemKey === "moon") {
                     let shopData;
                     if (useFirebase()) {
-                        try {
-                            shopData = await getUserDataAsync(config.SHOP_DATA_FILE, 'moon_data') || {};
-                        } catch (error) {
-                            shopData = {};
-                        }
+                        shopData = await getUserDataAsync(config.SHOP_DATA_FILE, 'moon_data') || {};
                     } else {
-                        shopData = carregarDados(config.SHOP_DATA_FILE);
+                        shopData = (carregarDados(config.SHOP_DATA_FILE) || {}).moon_data || {};
                     }
-                    
+
                     const price = shopData.moon_price || itemData.price;
-                    fieldValue += `• ${roleMention}: ${itemData.description}\n*Preço atual: M$ ${price.toLocaleString()}*\n`;
+                    const ownerId = shopData.moon_owner_id;
+                    const ownerText = ownerId ? `(Dono atual: <@${ownerId}>)` : "(Disponível)";
+
+                    fieldValue += `• ${roleMention}: ${itemData.description}\n*Preço atual: M$ ${price.toLocaleString()}* ${ownerText}\n\n`;
                 } else {
-                    fieldValue += `• ${roleMention}: ${itemData.description}\n*Preço: M$ ${itemData.price.toLocaleString()}*\n`;
+                    fieldValue += `• ${roleMention}: ${itemData.description}\n*Preço: M$ ${itemData.price.toLocaleString()}*\n\n`;
                 }
             }
             
-            embed.addFields({ name: `📦 ${categoryData.name}`, value: fieldValue, inline: false });
+            embed.addFields({ name: `📦 ${categoryData.name}`, value: fieldValue.trim(), inline: false });
         }
 
         return embed;
@@ -277,4 +306,3 @@ class LojaView {
 }
 
 module.exports = { LojaView, ItemSelect };
-
