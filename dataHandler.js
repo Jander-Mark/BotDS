@@ -194,11 +194,6 @@ async function getUserEconomyData(userId, economyFile) {
     
     const mergedData = { ...defaultData, ...userData };
     
-    // Se algum campo estava faltando, salvar os dados atualizados
-    if (Object.keys(userData).length !== Object.keys(defaultData).length) {
-        await setUserDataAsync(economyFile, userId, mergedData);
-    }
-    
     return mergedData;
 }
 
@@ -215,18 +210,7 @@ async function getUserXpData(userId, xpFile) {
     
     const mergedData = { ...defaultData, ...userData };
     
-    // Se algum campo estava faltando, salvar os dados atualizados
-    if (Object.keys(userData).length !== Object.keys(defaultData).length) {
-        await setUserDataAsync(xpFile, userId, mergedData);
-    }
-    
     return mergedData;
-}
-
-// ------------------- FUNÇÃO PARA CALCULAR XP -------------------
-function calculateXpForLevel(level) {
-    if (level < 1) return 0;
-    return 25 * (level * level) + 50 * level;
 }
 
 // ------------------- FUNÇÕES DE COMPATIBILIDADE (SÍNCRONAS) -------------------
@@ -235,18 +219,19 @@ function getUserEconomyDataSync(userId, economyFile) {
     const economia = carregarDados(economyFile);
     const userIdStr = userId.toString();
     
-    if (!economia[userIdStr] || !economia[userIdStr].hasOwnProperty("ganhos_devolvendo")) {
-        economia[userIdStr] = {
-            carteira: economia[userIdStr]?.carteira || 0,
-            ultimo_daily: economia[userIdStr]?.ultimo_daily || null,
-            carteiras_devolvidas: economia[userIdStr]?.carteiras_devolvidas || 0,
-            ganhos_devolvendo: 0,
-            ganhos_pegando: 0,
-            perdas_policia: 0,
-            carteiras_pegas: 0
-        };
-        salvarDados(economyFile, economia);
-    }
+    const defaultData = {
+        carteira: 0,
+        ultimo_daily: null,
+        carteiras_devolvidas: 0,
+        ganhos_devolvendo: 0,
+        ganhos_pegando: 0,
+        perdas_policia: 0,
+        carteiras_pegas: 0
+    };
+    
+    economia[userIdStr] = { ...defaultData, ...economia[userIdStr] };
+    salvarDados(economyFile, economia);
+    
     return economia[userIdStr];
 }
 
@@ -265,6 +250,42 @@ function getUserXpDataSync(userId, xpFile) {
     return xpData[userIdStr];
 }
 
+/**
+ * Calcula o XP total necessário para atingir um determinado nível.
+ * @param {number} level - O nível.
+ * @returns {number} O XP total necessário.
+ */
+function calculateXpForLevel(level) {
+    if (level < 1) return 0;
+    return 25 * (level * level) + 50 * level;
+}
+
+/**
+ * Calcula o nível de um usuário com base em seu XP total.
+ * Inverso de calculateXpForLevel.
+ * @param {number} xp - O XP total do usuário.
+ * @returns {number} O nível calculado.
+ */
+function calculateLevelForXp(xp) {
+    if (xp <= 0) return 0;
+    // Fórmula matemática para encontrar L: L = (sqrt(2500 + 100 * XP) - 50) / 50
+    const level = Math.floor((Math.sqrt(2500 + 100 * xp) - 50) / 50);
+    return Math.max(0, level);
+}
+
+/**
+ * Atualiza o nível de um usuário com base em seu XP atual e retorna os dados atualizados.
+ * @param {object} userData - O objeto de dados de XP do usuário.
+ * @returns {object} O objeto de dados de XP atualizado com o nível correto.
+ */
+function updateUserLevel(userData) {
+    const newLevel = calculateLevelForXp(userData.xp);
+    if (newLevel !== userData.level) {
+        userData.level = newLevel;
+    }
+    return userData;
+}
+
 module.exports = {
     // Inicialização
     initializeDataHandler,
@@ -274,7 +295,6 @@ module.exports = {
     salvarDados,
     getUserEconomyData: getUserEconomyDataSync,
     getUserXpData: getUserXpDataSync,
-    calculateXpForLevel,
     
     // Funções assíncronas (Firebase)
     carregarDadosAsync,
@@ -288,6 +308,10 @@ module.exports = {
     
     // Utilitários
     useFirebase: () => useFirebase,
-    getCollectionName
-};
+    getCollectionName,
 
+    // Funções de XP e Nível
+    calculateXpForLevel,
+    calculateLevelForXp,
+    updateUserLevel
+};
