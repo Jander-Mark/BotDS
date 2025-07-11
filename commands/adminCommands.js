@@ -67,7 +67,6 @@ const economiaAdminGroup = {
                 )
         ),
     async execute(interaction) {
-        // Verificar se o usuário tem o cargo necessário
         if (!interaction.member.roles.cache.has(config.BAN_COMMAND_ROLE_ID)) {
             await interaction.reply({ content: "Você não tem permissão para usar este comando.", ephemeral: true });
             return;
@@ -87,7 +86,6 @@ const economiaAdminGroup = {
         switch (subcommand) {
             case 'definir':
                 userData.carteira = quantia;
-                
                 if (useFirebase()) {
                     await setUserDataAsync(config.ECONOMY_FILE, membro.id, userData);
                 } else {
@@ -95,7 +93,6 @@ const economiaAdminGroup = {
                     economia[membro.id.toString()] = userData;
                     salvarDados(config.ECONOMY_FILE, economia);
                 }
-                
                 await interaction.reply({ 
                     content: `✅ O saldo de ${membro.toString()} foi definido para **${quantia.toLocaleString()}** moedas furradas.`, 
                     ephemeral: true 
@@ -104,7 +101,6 @@ const economiaAdminGroup = {
 
             case 'adicionar':
                 userData.carteira += quantia;
-                
                 if (useFirebase()) {
                     await setUserDataAsync(config.ECONOMY_FILE, membro.id, userData);
                 } else {
@@ -112,7 +108,6 @@ const economiaAdminGroup = {
                     economia[membro.id.toString()] = userData;
                     salvarDados(config.ECONOMY_FILE, economia);
                 }
-                
                 await interaction.reply({ 
                     content: `✅ Foram adicionadas **${quantia.toLocaleString()}** moedas à carteira de ${membro.toString()}. Novo saldo: ${userData.carteira.toLocaleString()}`, 
                     ephemeral: true 
@@ -122,7 +117,6 @@ const economiaAdminGroup = {
             case 'remover':
                 const saldoAntigo = userData.carteira;
                 userData.carteira = Math.max(0, saldoAntigo - quantia);
-                
                 if (useFirebase()) {
                     await setUserDataAsync(config.ECONOMY_FILE, membro.id, userData);
                 } else {
@@ -130,7 +124,6 @@ const economiaAdminGroup = {
                     economia[membro.id.toString()] = userData;
                     salvarDados(config.ECONOMY_FILE, economia);
                 }
-                
                 await interaction.reply({ 
                     content: `✅ Foram removidas **${quantia.toLocaleString()}** moedas da carteira de ${membro.toString()}. Novo saldo: ${userData.carteira.toLocaleString()}`, 
                     ephemeral: true 
@@ -178,7 +171,6 @@ const xpAdminGroup = {
                 )
         ),
     async execute(interaction) {
-        // Verificar se o usuário tem o cargo necessário
         if (!interaction.member.roles.cache.has(config.BAN_COMMAND_ROLE_ID)) {
             await interaction.reply({ content: "Você não tem permissão para usar este comando.", ephemeral: true });
             return;
@@ -198,7 +190,6 @@ const xpAdminGroup = {
         switch (subcommand) {
             case 'adicionar':
                 userData.xp += quantia;
-                
                 if (useFirebase()) {
                     await setUserDataAsync(config.XP_FILE, membro.id, userData);
                 } else {
@@ -206,17 +197,14 @@ const xpAdminGroup = {
                     xpData[membro.id.toString()] = userData;
                     salvarDados(config.XP_FILE, xpData);
                 }
-                
                 await interaction.reply({ 
                     content: `✅ Foram adicionados **${quantia.toLocaleString()}** XP para ${membro.toString()}. XP total: ${userData.xp.toLocaleString()}`, 
                     ephemeral: true 
                 });
-                // TODO: Implementar checkLevelUp
                 break;
 
             case 'remover':
                 userData.xp = Math.max(0, userData.xp - quantia);
-                
                 if (useFirebase()) {
                     await setUserDataAsync(config.XP_FILE, membro.id, userData);
                 } else {
@@ -224,7 +212,6 @@ const xpAdminGroup = {
                     xpData[membro.id.toString()] = userData;
                     salvarDados(config.XP_FILE, xpData);
                 }
-                
                 await interaction.reply({ 
                     content: `✅ Foram removidos **${quantia.toLocaleString()}** XP de ${membro.toString()}. XP total: ${userData.xp.toLocaleString()}`, 
                     ephemeral: true 
@@ -240,13 +227,14 @@ const postarLojaCommand = {
         .setName('postar_loja')
         .setDescription('[Admin] Posta a mensagem da loja no canal atual.'),
     async execute(interaction) {
-        // Verificar se o usuário tem o cargo necessário
         if (!interaction.member.roles.cache.has(config.BAN_COMMAND_ROLE_ID)) {
             await interaction.reply({ content: "Você não tem permissão para usar este comando.", ephemeral: true });
             return;
         }
 
-        const embed = LojaView.createShopEmbed();
+        // --- CORREÇÃO APLICADA AQUI ---
+        // Aguarda a criação do embed, pois a função agora é assíncrona
+        const embed = await LojaView.createShopEmbed();
         const lojaView = new LojaView();
         const row = lojaView.createActionRow();
 
@@ -261,7 +249,6 @@ const droparCarteiraCommand = {
         .setName('dropar_carteira')
         .setDescription('[Admin] Inicia um evento de carteira perdida no canal.'),
     async execute(interaction) {
-        // Verificar se o usuário tem o cargo necessário
         if (!interaction.member.roles.cache.has(config.BAN_COMMAND_ROLE_ID)) {
             await interaction.reply({ content: "Você não tem permissão para usar este comando.", ephemeral: true });
             return;
@@ -287,7 +274,6 @@ const droparCristalCommand = {
         .setName('dropar_cristal')
         .setDescription('[Admin] Inicia um evento de cristal misterioso.'),
     async execute(interaction) {
-        // Verificar se o usuário tem o cargo necessário
         if (!interaction.member.roles.cache.has(config.BAN_COMMAND_ROLE_ID)) {
             await interaction.reply({ content: "Você não tem permissão para usar este comando.", ephemeral: true });
             return;
@@ -314,4 +300,3 @@ module.exports = {
     droparCarteiraCommand, 
     droparCristalCommand 
 };
-
