@@ -326,17 +326,6 @@ service cloud.firestore {
 }
 ```
 
-## 📄 Licença
-
-Este projeto está sob a licença ISC. Veja o arquivo `package.json` para mais detalhes.
-
-## 🤝 Contribuição
-
-Sinta-se à vontade para contribuir com melhorias, correções de bugs ou novas funcionalidades!
-
-## 📞 Suporte
-
-Se encontrar problemas ou tiver dúvidas:
 1. Verifique a seção de solução de problemas
 2. Consulte os logs do console para erros específicos
 3. Teste primeiro com JSON local antes de usar Firebase
