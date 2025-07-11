@@ -33,23 +33,20 @@ class CarteiraPerdidaView {
             .addComponents(pegarButton, devolverButton);
     }
 
-    async handleInteraction(interaction, embed) {
-        // Desabilitar todos os botões
+    async handlePublicUpdate(interaction, embed) {
+        // Desabilita os botões na mensagem original
         const row = this.createActionRow();
         row.components.forEach(component => component.setDisabled(true));
 
-        if (!interaction.replied && !interaction.deferred) {
-            await interaction.update({ embeds: [embed], components: [row] });
-        } else {
-            await interaction.editReply({ embeds: [embed], components: [row] });
-        }
-        
-        // Deletar mensagem após 3 minutos
+        // Edita a mensagem ORIGINAL do evento para que todos vejam
+        await interaction.message.edit({ embeds: [embed], components: [row] });
+
+        // Deleta a mensagem do evento após 3 minutos
         setTimeout(async () => {
             try {
                 await interaction.message.delete();
             } catch (error) {
-                // Mensagem pode já ter sido deletada
+                // A mensagem pode já ter sido deletada
             }
         }, 180000);
     }
@@ -62,7 +59,7 @@ class CarteiraPerdidaView {
 
         this.interagidoPor.add(interaction.user.id);
 
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferUpdate();
 
         let userData;
         if (useFirebase()) {
@@ -107,7 +104,7 @@ class CarteiraPerdidaView {
             salvarDados(config.ECONOMY_FILE, economia);
         }
         
-        await this.handleInteraction(interaction, embed);
+        await this.handlePublicUpdate(interaction, embed);
     }
 
     async handleDevolverCarteira(interaction) {
@@ -118,7 +115,7 @@ class CarteiraPerdidaView {
 
         this.interagidoPor.add(interaction.user.id);
 
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferUpdate();
 
         let userData;
         if (useFirebase()) {
@@ -128,7 +125,7 @@ class CarteiraPerdidaView {
         }
 
         let ganhos;
-        if (Math.random() < 0.01) {
+        if (Math.random() < 0.01) { // 1% de chance de recompensa alta
             ganhos = 2000;
         } else {
             ganhos = Math.floor(Math.random() * 251) + 50; // 50-300
@@ -143,15 +140,15 @@ class CarteiraPerdidaView {
             .setDescription(`**${interaction.user.displayName}** foi honesto(a) e devolveu a carteira!\n\nComo recompensa, ele(a) ganhou **${ganhos.toLocaleString()}** moedas furradas!\n\n*Total de carteiras devolvidas: ${userData.carteiras_devolvidas}*`)
             .setColor(0x00FF00);
 
-        // Verificar se chegou a 50 carteiras devolvidas
+        // Verificar se chegou a 50 carteiras devolvidas para dar o cargo
         if (userData.carteiras_devolvidas === 50) {
             const bomSamaritanoRole = interaction.guild.roles.cache.get(config.GOOD_SAMARITAN_ROLE_ID);
             if (bomSamaritanoRole && !interaction.member.roles.cache.has(config.GOOD_SAMARITAN_ROLE_ID)) {
                 try {
                     await interaction.member.roles.add(bomSamaritanoRole, "Devolveu 50 carteiras.");
-                    embed.setFooter({ text: `Parabéns! Você recebeu o cargo \'${bomSamaritanoRole.name}\'!` });
+                    embed.setFooter({ text: `Parabéns! Você recebeu o cargo '${bomSamaritanoRole.name}'!` });
                 } catch (error) {
-                    console.error(`ERRO: Não foi possível adicionar o cargo \'${bomSamaritanoRole.name}\' a ${interaction.user.username}.`);
+                    console.error(`ERRO: Não foi possível adicionar o cargo '${bomSamaritanoRole.name}' a ${interaction.user.username}.`);
                 }
             }
         }
@@ -164,7 +161,7 @@ class CarteiraPerdidaView {
             salvarDados(config.ECONOMY_FILE, economia);
         }
         
-        await this.handleInteraction(interaction, embed);
+        await this.handlePublicUpdate(interaction, embed);
     }
 }
 
@@ -196,23 +193,20 @@ class CristalMisteriosoView {
             .addComponents(lamberButton, coletarButton, venderButton);
     }
 
-    async handleInteraction(interaction, embed) {
-        // Desabilitar todos os botões
+    async handlePublicUpdate(interaction, embed) {
+        // Desabilita os botões na mensagem original
         const row = this.createActionRow();
         row.components.forEach(component => component.setDisabled(true));
 
-        if (!interaction.replied && !interaction.deferred) {
-            await interaction.update({ embeds: [embed], components: [row] });
-        } else {
-            await interaction.editReply({ embeds: [embed], components: [row] });
-        }
+        // Edita a mensagem ORIGINAL do evento para que todos vejam
+        await interaction.message.edit({ embeds: [embed], components: [row] });
         
-        // Deletar mensagem após 3 minutos
+        // Deleta a mensagem do evento após 3 minutos
         setTimeout(async () => {
             try {
                 await interaction.message.delete();
             } catch (error) {
-                // Mensagem pode já ter sido deletada
+                // A mensagem pode já ter sido deletada
             }
         }, 180000);
     }
@@ -225,7 +219,7 @@ class CristalMisteriosoView {
 
         this.interagidoPor.add(interaction.user.id);
 
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferUpdate();
 
         let embed;
         if (Math.random() < 0.50) {
@@ -251,8 +245,6 @@ class CristalMisteriosoView {
                 .setDescription(`**${interaction.user.displayName}** lambeu o cristal e sentiu uma onda de energia! Ele(a) absorveu **300 XP**.`)
                 .setColor(0x800080);
 
-            // Verificar level up (implementar depois)
-            // await checkLevelUp(interaction, interaction.user.id);
         } else {
             embed = new EmbedBuilder()
                 .setTitle("😝 Gosto Ruim!")
@@ -260,7 +252,7 @@ class CristalMisteriosoView {
                 .setColor(0xD3D3D3);
         }
 
-        await this.handleInteraction(interaction, embed);
+        await this.handlePublicUpdate(interaction, embed);
     }
 
     async handleColetarCristal(interaction) {
@@ -271,7 +263,7 @@ class CristalMisteriosoView {
 
         this.interagidoPor.add(interaction.user.id);
 
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferUpdate();
 
         let userData;
         if (useFirebase()) {
@@ -295,9 +287,7 @@ class CristalMisteriosoView {
             .setDescription(`**${interaction.user.displayName}** coletou o cristal e absorveu **100 XP**.`)
             .setColor(0x00FF00);
 
-        // Verificar level up (implementar depois)
-        // await checkLevelUp(interaction, interaction.user.id);
-        await this.handleInteraction(interaction, embed);
+        await this.handlePublicUpdate(interaction, embed);
     }
 
     async handleVenderCristal(interaction) {
@@ -308,7 +298,7 @@ class CristalMisteriosoView {
 
         this.interagidoPor.add(interaction.user.id);
 
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferUpdate();
 
         let userData;
         if (useFirebase()) {
@@ -339,9 +329,8 @@ class CristalMisteriosoView {
             .setDescription(`**${interaction.user.displayName}** vendeu o cristal e ganhou **${ganhos.toLocaleString()}** moedas furradas!`)
             .setColor(0x0000FF);
 
-        await this.handleInteraction(interaction, embed);
+        await this.handlePublicUpdate(interaction, embed);
     }
 }
 
 module.exports = { CarteiraPerdidaView, CristalMisteriosoView };
-
