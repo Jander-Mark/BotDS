@@ -7,13 +7,14 @@ const {
     getUserEconomyDataAsync,
     getUserXpDataAsync,
     setUserDataAsync,
-    useFirebase
+    useFirebase,
+    updateUserLevel // <--- IMPORTAÇÃO DA FUNÇÃO ATUALIZADA
 } = require('../dataHandler');
 const config = require('../config');
 const { LojaView } = require('../views/LojaView');
 const { CarteiraPerdidaView, CristalMisteriosoView } = require('../views/EventViews');
 
-// Comandos de Economia Admin
+// Comandos de Economia Admin (sem alterações)
 const economiaAdminGroup = {
     data: new SlashCommandBuilder()
         .setName('economia_admin')
@@ -76,64 +77,36 @@ const economiaAdminGroup = {
         const membro = interaction.options.getUser('membro');
         const quantia = interaction.options.getInteger('quantia');
 
-        let userData;
-        if (useFirebase()) {
-            userData = await getUserEconomyDataAsync(membro.id, config.ECONOMY_FILE);
-        } else {
-            userData = getUserEconomyData(membro.id, config.ECONOMY_FILE);
-        }
+        let userData = await getUserEconomyDataAsync(membro.id, config.ECONOMY_FILE);
 
         switch (subcommand) {
             case 'definir':
                 userData.carteira = quantia;
-                if (useFirebase()) {
-                    await setUserDataAsync(config.ECONOMY_FILE, membro.id, userData);
-                } else {
-                    const economia = carregarDados(config.ECONOMY_FILE);
-                    economia[membro.id.toString()] = userData;
-                    salvarDados(config.ECONOMY_FILE, economia);
-                }
-                await interaction.reply({ 
-                    content: `✅ O saldo de ${membro.toString()} foi definido para **${quantia.toLocaleString()}** moedas furradas.`, 
-                    ephemeral: true 
-                });
                 break;
-
             case 'adicionar':
                 userData.carteira += quantia;
-                if (useFirebase()) {
-                    await setUserDataAsync(config.ECONOMY_FILE, membro.id, userData);
-                } else {
-                    const economia = carregarDados(config.ECONOMY_FILE);
-                    economia[membro.id.toString()] = userData;
-                    salvarDados(config.ECONOMY_FILE, economia);
-                }
-                await interaction.reply({ 
-                    content: `✅ Foram adicionadas **${quantia.toLocaleString()}** moedas à carteira de ${membro.toString()}. Novo saldo: ${userData.carteira.toLocaleString()}`, 
-                    ephemeral: true 
-                });
                 break;
-
             case 'remover':
-                const saldoAntigo = userData.carteira;
-                userData.carteira = Math.max(0, saldoAntigo - quantia);
-                if (useFirebase()) {
-                    await setUserDataAsync(config.ECONOMY_FILE, membro.id, userData);
-                } else {
-                    const economia = carregarDados(config.ECONOMY_FILE);
-                    economia[membro.id.toString()] = userData;
-                    salvarDados(config.ECONOMY_FILE, economia);
-                }
-                await interaction.reply({ 
-                    content: `✅ Foram removidas **${quantia.toLocaleString()}** moedas da carteira de ${membro.toString()}. Novo saldo: ${userData.carteira.toLocaleString()}`, 
-                    ephemeral: true 
-                });
+                userData.carteira = Math.max(0, userData.carteira - quantia);
                 break;
         }
+
+        if (useFirebase()) {
+            await setUserDataAsync(config.ECONOMY_FILE, membro.id, userData);
+        } else {
+            const economia = carregarDados(config.ECONOMY_FILE);
+            economia[membro.id.toString()] = userData;
+            salvarDados(config.ECONOMY_FILE, economia);
+        }
+        
+        await interaction.reply({ 
+            content: `✅ A carteira de ${membro.toString()} foi atualizada para **${userData.carteira.toLocaleString()}** moedas.`, 
+            ephemeral: true 
+        });
     }
 };
 
-// Comandos de XP Admin
+// Comandos de XP Admin (COM ALTERAÇÕES)
 const xpAdminGroup = {
     data: new SlashCommandBuilder()
         .setName('xp_admin')
@@ -180,48 +153,33 @@ const xpAdminGroup = {
         const membro = interaction.options.getUser('membro');
         const quantia = interaction.options.getInteger('quantia');
 
-        let userData;
+        let userData = await getUserXpDataAsync(membro.id, config.XP_FILE);
+
+        if (subcommand === 'adicionar') {
+            userData.xp += quantia;
+        } else if (subcommand === 'remover') {
+            userData.xp = Math.max(0, userData.xp - quantia);
+        }
+
+        // Recalcula o nível do usuário com base no novo total de XP
+        userData = updateUserLevel(userData);
+
         if (useFirebase()) {
-            userData = await getUserXpDataAsync(membro.id, config.XP_FILE);
+            await setUserDataAsync(config.XP_FILE, membro.id, userData);
         } else {
-            userData = getUserXpData(membro.id, config.XP_FILE);
+            const xpData = carregarDados(config.XP_FILE);
+            xpData[membro.id.toString()] = userData;
+            salvarDados(config.XP_FILE, xpData);
         }
-
-        switch (subcommand) {
-            case 'adicionar':
-                userData.xp += quantia;
-                if (useFirebase()) {
-                    await setUserDataAsync(config.XP_FILE, membro.id, userData);
-                } else {
-                    const xpData = carregarDados(config.XP_FILE);
-                    xpData[membro.id.toString()] = userData;
-                    salvarDados(config.XP_FILE, xpData);
-                }
-                await interaction.reply({ 
-                    content: `✅ Foram adicionados **${quantia.toLocaleString()}** XP para ${membro.toString()}. XP total: ${userData.xp.toLocaleString()}`, 
-                    ephemeral: true 
-                });
-                break;
-
-            case 'remover':
-                userData.xp = Math.max(0, userData.xp - quantia);
-                if (useFirebase()) {
-                    await setUserDataAsync(config.XP_FILE, membro.id, userData);
-                } else {
-                    const xpData = carregarDados(config.XP_FILE);
-                    xpData[membro.id.toString()] = userData;
-                    salvarDados(config.XP_FILE, xpData);
-                }
-                await interaction.reply({ 
-                    content: `✅ Foram removidos **${quantia.toLocaleString()}** XP de ${membro.toString()}. XP total: ${userData.xp.toLocaleString()}`, 
-                    ephemeral: true 
-                });
-                break;
-        }
+        
+        await interaction.reply({ 
+            content: `✅ O XP de ${membro.toString()} foi atualizado. XP Total: **${userData.xp.toLocaleString()}**, Nível Atual: **${userData.level}**.`,
+            ephemeral: true 
+        });
     }
 };
 
-// Comando para postar loja
+// Comando para postar loja (código da resposta anterior)
 const postarLojaCommand = {
     data: new SlashCommandBuilder()
         .setName('postar_loja')
@@ -232,8 +190,6 @@ const postarLojaCommand = {
             return;
         }
 
-        // --- CORREÇÃO APLICADA AQUI ---
-        // Aguarda a criação do embed, pois a função agora é assíncrona
         const embed = await LojaView.createShopEmbed();
         const lojaView = new LojaView();
         const row = lojaView.createActionRow();
@@ -243,7 +199,7 @@ const postarLojaCommand = {
     }
 };
 
-// Comando para dropar carteira
+// Comando para dropar carteira (sem alterações)
 const droparCarteiraCommand = {
     data: new SlashCommandBuilder()
         .setName('dropar_carteira')
@@ -268,7 +224,7 @@ const droparCarteiraCommand = {
     }
 };
 
-// Comando para dropar cristal
+// Comando para dropar cristal (sem alterações)
 const droparCristalCommand = {
     data: new SlashCommandBuilder()
         .setName('dropar_cristal')
