@@ -2,18 +2,13 @@ const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, Butt
 const { 
     carregarDadosAsync,
     getUserEconomyDataAsync,
-    updateUserDataAsync,
-    useFirebase
+    updateUserDataAsync
 } = require('../dataHandler');
 const config = require('../config');
+const fs = require('fs');
+const path = require('path');
 
-// --- GERENCIADOR DE TRANSFERÊNCIAS PENDENTES ---
-// Usamos um Map para guardar as transações que estão aguardando confirmação.
-// Exportamos para que o interactionCreate.js possa acessá-lo.
 const pendingTransfers = new Map();
-module.exports.pendingTransfers = pendingTransfers;
-
-// --- COMANDOS DE ECONOMIA ---
 
 const carteiraCommand = {
     data: new SlashCommandBuilder()
@@ -66,7 +61,7 @@ const dailyCommand = {
             }
         }
 
-        userData.carteira += 2000;
+        userData.carteira = (userData.carteira || 0) + 2000;
         userData.ultimo_daily = agora.toISOString();
         await updateUserDataAsync(config.ECONOMY_FILE, userId, userData);
         
@@ -186,12 +181,12 @@ const statusCarteiraCommand = {
             .setTitle(`📊 Status de Carteiras de ${interaction.user.displayName}`)
             .setColor(0x0099FF)
             .addFields(
-                { name: "😇 Carteiras Devolvidas", value: `\`${userData.carteiras_devolvidas}\``, inline: true },
-                { name: "🏃 Carteiras Pegas", value: `\`${userData.carteiras_pegas}\``, inline: true },
+                { name: "😇 Carteiras Devolvidas", value: `\`${userData.carteiras_devolvidas || 0}\``, inline: true },
+                { name: "🏃 Carteiras Pegas", value: `\`${userData.carteiras_pegas || 0}\``, inline: true },
                 { name: "\u200b", value: "\u200b", inline: false },
-                { name: "💸 Ganhos Devolvendo", value: `\`${userData.ganhos_devolvendo.toLocaleString()}\` moedas`, inline: true },
-                { name: "💰 Ganhos Pegando", value: `\`${userData.ganhos_pegando.toLocaleString()}\` moedas`, inline: true },
-                { name: "🚓 Multas da Pawlice", value: `\`${userData.perdas_policia.toLocaleString()}\` moedas`, inline: true }
+                { name: "💸 Ganhos Devolvendo", value: `\`${(userData.ganhos_devolvendo || 0).toLocaleString()}\` moedas`, inline: true },
+                { name: "💰 Ganhos Pegando", value: `\`${(userData.ganhos_pegando || 0).toLocaleString()}\` moedas`, inline: true },
+                { name: "🚓 Multas da Pawlice", value: `\`${(userData.perdas_policia || 0).toLocaleString()}\` moedas`, inline: true }
             );
         
         await interaction.reply({ embeds: [embed] });
@@ -210,25 +205,90 @@ const topcarteiraCommand = {
             return;
         }
         
-        const sortedWallets = Object.entries(economia).sort((a, b) => (b[1].carteira || 0) - (a[1].carteira || 0));
+        const sortedWallets = Object.entries(economia)
+            .sort((a, b) => (b[1].carteira || 0) - (a[1].carteira || 0))
+            .filter(entry => !interaction.client.users.cache.get(entry[0])?.bot);
         
         const embed = new EmbedBuilder()
             .setTitle("💰 Ranking de Moedas Furradas")
             .setColor(0xFFD700);
         
         let description = "";
-        for (let i = 0; i < Math.min(10, sortedWallets.length); i++) {
-            const [userId, data] = sortedWallets[i];
+        const top10 = sortedWallets.slice(0, 10);
+
+        for (let i = 0; i < top10.length; i++) {
+            const [userId, data] = top10[i];
             try {
                 const member = await interaction.guild.members.fetch(userId);
                 description += `**#${i + 1}** ${member.displayName} - ${(data.carteira || 0).toLocaleString()} moedas\n`;
             } catch (error) {
-                description += `**#${i + 1}** *Membro Desconhecido (ID: ${userId})* - ${(data.carteira || 0).toLocaleString()} moedas\n`;
+                // Não mostra membros que saíram do servidor
             }
         }
         
+        if (!description) {
+            description = "Nenhum membro com moedas no ranking ainda.";
+        }
+
         embed.setDescription(description);
         await interaction.reply({ embeds: [embed] });
+    }
+};
+
+const historicoCommand = {
+    data: new SlashCommandBuilder()
+        .setName('historico')
+        .setDescription('Mostra seu histórico de transferências.')
+        .addUserOption(option =>
+            option.setName('membro')
+                .setDescription('Ver o histórico de outro membro (apenas para staff)')
+                .setRequired(false)
+        ),
+    async execute(interaction) {
+        const targetUser = interaction.options.getUser('membro') || interaction.user;
+
+        // Verifica se o autor da interação é staff se estiver tentando ver o histórico de outra pessoa
+        if (targetUser.id !== interaction.user.id && !interaction.member.roles.cache.has(config.STAFF_ROLE_ID)) {
+            await interaction.reply({ content: "❌ Você só pode ver o seu próprio histórico.", ephemeral: true });
+            return;
+        }
+
+        const logFile = path.join(__dirname, '..', 'logs', 'transferencias.json');
+        if (!fs.existsSync(logFile)) {
+            await interaction.reply({ content: "Nenhuma transferência foi registrada no servidor ainda.", ephemeral: true });
+            return;
+        }
+
+        const logs = JSON.parse(fs.readFileSync(logFile, 'utf8'));
+        const userTransactions = logs.transferencias
+            .filter(t => t.remetente === targetUser.id || t.destinatario === targetUser.id)
+            .slice(0, 10); // Pega as últimas 10 transações
+
+        if (userTransactions.length === 0) {
+            await interaction.reply({ content: "Você ainda não tem nenhuma transferência no seu histórico.", ephemeral: true });
+            return;
+        }
+
+        const embed = new EmbedBuilder()
+            .setTitle(`📜 Histórico de Transferências de ${targetUser.displayName}`)
+            .setColor(0x3498DB)
+            .setDescription("Mostrando suas últimas 10 transações.");
+
+        for (const t of userTransactions) {
+            const timestamp = Math.floor(new Date(t.timestamp).getTime() / 1000);
+            let description, color;
+
+            if (t.remetente === targetUser.id) {
+                description = `**Enviou ${t.quantia.toLocaleString()} moedas** para <@${t.destinatario}>`;
+                color = "🔴";
+            } else {
+                description = `**Recebeu ${t.quantia.toLocaleString()} moedas** de <@${t.remetente}>`;
+                color = "🟢";
+            }
+            embed.addFields({ name: `${color} <t:${timestamp}:R>`, value: description });
+        }
+        
+        await interaction.reply({ embeds: [embed], ephemeral: true });
     }
 };
 
@@ -238,5 +298,6 @@ module.exports = {
     dailyCommand, 
     transferirCommand, 
     statusCarteiraCommand, 
-    topcarteiraCommand 
+    topcarteiraCommand,
+    historicoCommand
 };
