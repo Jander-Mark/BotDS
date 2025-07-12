@@ -1,5 +1,5 @@
 const fs = require('fs');
-const path = require('path'); // Adicionado para lidar com caminhos de arquivo
+const path = require('path');
 const firebaseHandler = require('./firebaseHandler');
 
 // Flag para determinar se usar Firebase ou JSON local
@@ -16,7 +16,6 @@ function carregarDados(arquivo) {
     if (!fs.existsSync(arquivo)) return {};
     try {
         const data = fs.readFileSync(arquivo, 'utf8');
-        // Retorna um objeto vazio se o arquivo estiver vazio para evitar erros de JSON.parse
         return data ? JSON.parse(data) : {};
     } catch (error) {
         console.error(`Erro ao carregar dados de ${arquivo}:`, error);
@@ -27,7 +26,6 @@ function carregarDados(arquivo) {
 function salvarDados(arquivo, data) {
     try {
         const dir = path.dirname(arquivo);
-        // Cria o diretório (ex: 'logs') se ele não existir
         if (!fs.existsSync(dir)) {
             fs.mkdirSync(dir, { recursive: true });
         }
@@ -37,33 +35,58 @@ function salvarDados(arquivo, data) {
     }
 }
 
-// ------------------- LÓGICA DE LOG DE TRANSFERÊNCIAS -------------------
+// ------------------- LÓGICA DE LOG DE TRANSAÇÕES (NOVO SISTEMA) -------------------
+const HISTORICO_FILE = 'historico_transacoes.json';
+const HISTORICO_COLLECTION = 'historico_transacoes';
 
 /**
- * Registra uma transferência em um arquivo de log.
- * @param {string} remetenteId 
- * @param {string} destinatarioId 
- * @param {number} quantia 
+ * Registra uma transação no histórico de um usuário.
+ * @param {string} userId - O ID do usuário.
+ * @param {'DAILY'|'TRANSFER_SENT'|'TRANSFER_RECEIVED'|'CRYSTAL_SELL'|'WALLET_REWARD'|'WALLET_FINE'|'WALLET_TREASURE'} type - O tipo de transação.
+ * @param {number} quantia - A quantia (positiva para ganhos, negativa para perdas).
+ * @param {string} descricao - Uma breve descrição da transação.
+ * @param {string|null} relatedUserId - O ID do outro usuário envolvido, se houver.
  */
-function logTransfer(remetenteId, destinatarioId, quantia) {
-    const logFile = path.join(__dirname, '..', 'logs', 'transferencias.json');
-    const logs = carregarDados(logFile);
-
+async function logTransaction(userId, type, quantia, descricao, relatedUserId = null) {
     const logEntry = {
-        id: `T${Date.now()}${Math.random().toString(36).substring(2, 6)}`,
-        remetente: remetenteId,
-        destinatario: destinatarioId,
+        id: `TX${Date.now()}${Math.random().toString(36).substring(2, 8)}`,
+        type: type,
         quantia: quantia,
+        descricao: descricao,
+        relatedUserId: relatedUserId,
         timestamp: new Date().toISOString()
     };
 
-    if (!logs.transferencias) {
-        logs.transferencias = [];
-    }
+    if (useFirebase) {
+        try {
+            const userDocRef = firebaseHandler.getCollection(HISTORICO_COLLECTION).doc(userId.toString());
+            
+            // CORREÇÃO APLICADA AQUI:
+            // Usamos .set() com { merge: true } em vez de .update().
+            // Isso cria o documento se ele não existir, ou atualiza o campo `transacoes` se o documento já existir.
+            // O arrayUnion garante que estamos apenas adicionando um novo item ao array sem sobrescrever os antigos.
+            await userDocRef.set({
+                transacoes: firebaseHandler.FieldValue.arrayUnion(logEntry)
+            }, { merge: true });
 
-    logs.transferencias.unshift(logEntry); // Adiciona a transação mais recente no início
-    salvarDados(logFile, logs);
+        } catch (error) {
+            console.error(`Erro ao salvar log de transação no Firebase para o usuário ${userId}:`, error);
+        }
+    } else {
+        const logFile = path.join(__dirname, '..', 'logs', HISTORICO_FILE);
+        const historicos = carregarDados(logFile);
+
+        if (!historicos[userId]) {
+            historicos[userId] = [];
+        }
+
+        historicos[userId].unshift(logEntry);
+        historicos[userId] = historicos[userId].slice(0, 50);
+
+        salvarDados(logFile, historicos);
+    }
 }
+
 
 // ------------------- FUNÇÕES PARA FIREBASE -------------------
 
@@ -71,7 +94,8 @@ const COLLECTION_MAPPING = {
     'economia.json': 'economia',
     'xp_data.json': 'xp_data',
     'contagem_entradas.json': 'contagem_entradas',
-    'shop_data.json': 'shop_data'
+    'shop_data.json': 'shop_data',
+    [HISTORICO_FILE]: HISTORICO_COLLECTION
 };
 
 function getCollectionName(arquivo) {
@@ -288,7 +312,7 @@ module.exports = {
     initializeDataHandler,
     carregarDados,
     salvarDados,
-    logTransfer, // <-- Exportando a nova função
+    logTransaction,
     getUserEconomyData: getUserEconomyDataSync,
     getUserXpData: getUserXpDataSync,
     carregarDadosAsync,
@@ -303,5 +327,7 @@ module.exports = {
     getCollectionName,
     calculateXpForLevel,
     calculateLevelForXp,
-    updateUserLevel
+    updateUserLevel,
+    HISTORICO_FILE,
+    HISTORICO_COLLECTION
 };
