@@ -1,4 +1,4 @@
-const { Client, Collection, GatewayIntentBits } = require('discord.js');
+const { Client, Collection, GatewayIntentBits, REST, Routes } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
 const config = require('./config');
@@ -53,18 +53,21 @@ for (const file of eventFiles) {
     const event = require(filePath);
     
     if (event.once) {
-        client.once(event.name, (...args) => event.execute(...args));
+        client.once(event.name, (...args) => event.execute(...args, client));
     } else {
-        client.on(event.name, (...args) => event.execute(...args));
+        client.on(event.name, (...args) => event.execute(...args, client));
     }
     
     console.log(`Evento carregado: ${event.name}`);
 }
 
-// Registrar comandos slash
+// Função para registrar os comandos no Discord
 async function deployCommands() {
-    const { REST, Routes } = require('discord.js');
-    
+    if (!config.CLIENT_ID || !config.GUILD_ID) {
+        console.error("ERRO: CLIENT_ID e GUILD_ID precisam ser configurados em config.js para registrar os comandos.");
+        return;
+    }
+
     const commands = [];
     client.commands.forEach(command => {
         commands.push(command.data.toJSON());
@@ -73,18 +76,17 @@ async function deployCommands() {
     const rest = new REST({ version: '10' }).setToken(config.TOKEN);
 
     try {
-        console.log('Iniciando refresh dos comandos de aplicação (/).');
+        console.log(`Iniciando o registro de ${commands.length} comandos de aplicação (/).`);
 
-        // Para desenvolvimento, use guild commands (mais rápido)
-        // Para produção, use global commands
-        // await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
-        
-        // Descomente a linha abaixo para comandos globais (demora até 1 hora para aparecer)
-        // await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
+        // Registra os comandos para um servidor específico (guild). É mais rápido para testes.
+        const data = await rest.put(
+            Routes.applicationGuildCommands(config.CLIENT_ID, config.GUILD_ID),
+            { body: commands },
+        );
 
-        console.log('Comandos de aplicação (/) recarregados com sucesso.');
+        console.log(`✅ ${data.length} comandos de aplicação (/) recarregados com sucesso.`);
     } catch (error) {
-        console.error('Erro ao registrar comandos:', error);
+        console.error('❌ Erro ao registrar comandos:', error);
     }
 }
 
@@ -93,21 +95,22 @@ if (!config.TOKEN || config.TOKEN === "") {
     console.error("ERRO CRÍTICO: O TOKEN do bot não foi configurado no arquivo config.js");
     process.exit(1);
 } else {
-    client.login(config.TOKEN)
-        .then(() => {
-            console.log("Bot logado com sucesso!");
-            console.log(`Sistema de dados: ${usingFirebase ? 'Firebase' : 'JSON Local'}`);
-            // Registrar comandos após o login
-            // deployCommands();
-        })
-        .catch(error => {
-            if (error.code === 'TokenInvalid') {
-                console.error("ERRO: O token fornecido é inválido.");
-            } else {
-                console.error("Ocorreu um erro inesperado:", error);
-            }
-            process.exit(1);
-        });
+    // Registra os comandos ANTES de fazer o login
+    deployCommands().then(() => {
+        client.login(config.TOKEN)
+            .then(() => {
+                console.log("Bot logado com sucesso!");
+                console.log(`Sistema de dados: ${usingFirebase ? 'Firebase' : 'JSON Local'}`);
+            })
+            .catch(error => {
+                if (error.code === 'TokenInvalid') {
+                    console.error("ERRO: O token fornecido é inválido.");
+                } else {
+                    console.error("Ocorreu um erro inesperado durante o login:", error);
+                }
+                process.exit(1);
+            });
+    });
 }
 
 // Tratamento de erros não capturados
@@ -119,4 +122,3 @@ process.on('uncaughtException', error => {
     console.error('Uncaught exception:', error);
     process.exit(1);
 });
-
