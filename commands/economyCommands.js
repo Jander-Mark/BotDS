@@ -1,15 +1,19 @@
-const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const { 
-    carregarDados, 
-    salvarDados, 
-    getUserEconomyData,
     carregarDadosAsync,
-    salvarDadosAsync,
     getUserEconomyDataAsync,
-    setUserDataAsync,
+    updateUserDataAsync,
     useFirebase
 } = require('../dataHandler');
 const config = require('../config');
+
+// --- GERENCIADOR DE TRANSFERÊNCIAS PENDENTES ---
+// Usamos um Map para guardar as transações que estão aguardando confirmação.
+// Exportamos para que o interactionCreate.js possa acessá-lo.
+const pendingTransfers = new Map();
+module.exports.pendingTransfers = pendingTransfers;
+
+// --- COMANDOS DE ECONOMIA ---
 
 const carteiraCommand = {
     data: new SlashCommandBuilder()
@@ -22,16 +26,9 @@ const carteiraCommand = {
         ),
     async execute(interaction) {
         const targetUser = interaction.options.getUser('membro') || interaction.user;
-        
-        let userData;
-        if (useFirebase()) {
-            userData = await getUserEconomyDataAsync(targetUser.id, config.ECONOMY_FILE);
-        } else {
-            userData = getUserEconomyData(targetUser.id, config.ECONOMY_FILE);
-        }
-        
+        const userData = await getUserEconomyDataAsync(targetUser.id, config.ECONOMY_FILE);
         const saldo = userData.carteira || 0;
-        
+
         const embed = new EmbedBuilder()
             .setTitle(`💰 Carteira de ${targetUser.displayName}`)
             .setDescription(`Você possui **${saldo.toLocaleString()}** moedas furradas!`)
@@ -46,23 +43,16 @@ const dailyCommand = {
         .setName('daily')
         .setDescription('Resgate suas 2000 moedas furradas diárias!'),
     async execute(interaction) {
-        const userIdStr = interaction.user.id.toString();
+        const userId = interaction.user.id;
         const agora = new Date();
-        
-        let userData;
-        if (useFirebase()) {
-            userData = await getUserEconomyDataAsync(interaction.user.id, config.ECONOMY_FILE);
-        } else {
-            userData = getUserEconomyData(interaction.user.id, config.ECONOMY_FILE);
-        }
-        
+        const userData = await getUserEconomyDataAsync(userId, config.ECONOMY_FILE);
         const ultimoDailyStr = userData.ultimo_daily;
-        
+
         if (ultimoDailyStr) {
             const ultimoDaily = new Date(ultimoDailyStr);
             const timeDiff = agora - ultimoDaily;
             const hoursInMs = 24 * 60 * 60 * 1000;
-            
+
             if (timeDiff < hoursInMs) {
                 const tempoRestante = hoursInMs - timeDiff;
                 const horas = Math.floor(tempoRestante / (60 * 60 * 1000));
@@ -75,17 +65,10 @@ const dailyCommand = {
                 return;
             }
         }
-        
+
         userData.carteira += 2000;
         userData.ultimo_daily = agora.toISOString();
-        
-        if (useFirebase()) {
-            await setUserDataAsync(config.ECONOMY_FILE, interaction.user.id, userData);
-        } else {
-            const economia = carregarDados(config.ECONOMY_FILE);
-            economia[userIdStr] = userData;
-            salvarDados(config.ECONOMY_FILE, economia);
-        }
+        await updateUserDataAsync(config.ECONOMY_FILE, userId, userData);
         
         await interaction.reply("🎉 Você resgatou suas **2000** moedas furradas diárias! Volte em 24 horas.");
     }
@@ -94,7 +77,7 @@ const dailyCommand = {
 const transferirCommand = {
     data: new SlashCommandBuilder()
         .setName('transferir')
-        .setDescription('Transfere moedas furradas para outro membro.')
+        .setDescription('Transfere moedas furradas para outro membro com confirmação.')
         .addUserOption(option =>
             option.setName('membro')
                 .setDescription('O membro para quem você quer transferir')
@@ -112,45 +95,83 @@ const transferirCommand = {
         const quantia = interaction.options.getInteger('quantia');
 
         if (remetente.id === destinatario.id) {
-            await interaction.reply({ content: "Você não pode transferir moedas para si mesmo!", ephemeral: true });
+            await interaction.reply({ content: "❌ Você não pode transferir moedas para si mesmo!", ephemeral: true });
+            return;
+        }
+        if (destinatario.bot) {
+            await interaction.reply({ content: "❌ Você não pode transferir moedas para um bot!", ephemeral: true });
             return;
         }
 
-        let remetenteData, destinatarioData;
-        
-        if (useFirebase()) {
-            remetenteData = await getUserEconomyDataAsync(remetente.id, config.ECONOMY_FILE);
-            destinatarioData = await getUserEconomyDataAsync(destinatario.id, config.ECONOMY_FILE);
-        } else {
-            remetenteData = getUserEconomyData(remetente.id, config.ECONOMY_FILE);
-            destinatarioData = getUserEconomyData(destinatario.id, config.ECONOMY_FILE);
-        }
+        const remetenteData = await getUserEconomyDataAsync(remetente.id, config.ECONOMY_FILE);
 
         if (remetenteData.carteira < quantia) {
             await interaction.reply({ 
-                content: `Você não tem moedas suficientes! Seu saldo é de ${remetenteData.carteira.toLocaleString()} moedas.`, 
+                content: `❌ Você não tem moedas suficientes! Seu saldo é de ${remetenteData.carteira.toLocaleString()} moedas.`, 
                 ephemeral: true 
             });
             return;
         }
 
-        remetenteData.carteira -= quantia;
-        destinatarioData.carteira += quantia;
+        const transactionId = `${remetente.id}-${destinatario.id}-${Date.now()}`;
+        const transferTimeLimit = 15 * 60 * 1000;
+        const expirationTimestamp = Math.floor((Date.now() + transferTimeLimit) / 1000);
+
+        const embed = new EmbedBuilder()
+            .setColor(0x5865F2)
+            .setTitle("🤝 Confirmação de Transferência")
+            .setDescription(
+                `**${remetente.displayName}** iniciou uma transferência de **${quantia.toLocaleString()}** moedas furradas para **${destinatario.displayName}**!\n\n` +
+                `Para a transação ser concluída, ambos devem clicar no botão "Aceitar Transferência" abaixo.\n\n` +
+                `A transação expira em <t:${expirationTimestamp}:R> (às <t:${expirationTimestamp}:T>).`
+            )
+            .addFields({
+                name: "⚠️ Atenção",
+                value: "Lembre-se: transferências são finais. Envie moedas apenas para pessoas de confiança."
+            });
+
+        const row = new ActionRowBuilder()
+            .addComponents(
+                new ButtonBuilder()
+                    .setCustomId(`accept_transfer_${transactionId}`)
+                    .setLabel("Aceitar Transferência (0/2)")
+                    .setStyle(ButtonStyle.Success)
+                    .setEmoji('✔️')
+            );
         
-        if (useFirebase()) {
-            await setUserDataAsync(config.ECONOMY_FILE, remetente.id, remetenteData);
-            await setUserDataAsync(config.ECONOMY_FILE, destinatario.id, destinatarioData);
-        } else {
-            const economia = carregarDados(config.ECONOMY_FILE);
-            economia[remetente.id.toString()] = remetenteData;
-            economia[destinatario.id.toString()] = destinatarioData;
-            salvarDados(config.ECONOMY_FILE, economia);
-        }
-        
-        await interaction.reply({ 
-            content: `✅ Você transferiu **${quantia.toLocaleString()}** moedas furradas para ${destinatario.toString()} com sucesso!`, 
-            ephemeral: true 
+        await interaction.reply({
+            content: `${remetente.toString()}, ${destinatario.toString()}`,
+            embeds: [embed],
+            components: [row]
         });
+
+        const message = await interaction.fetchReply();
+
+        pendingTransfers.set(transactionId, {
+            remetenteId: remetente.id,
+            destinatarioId: destinatario.id,
+            quantia: quantia,
+            accepted: new Set(),
+            messageId: message.id,
+            channelId: interaction.channel.id,
+        });
+
+        setTimeout(() => {
+            const transfer = pendingTransfers.get(transactionId);
+            if (transfer) {
+                const expiredEmbed = new EmbedBuilder()
+                    .setColor(0xED4245)
+                    .setTitle("🚫 Transferência Expirada")
+                    .setDescription(`A transferência de **${quantia.toLocaleString()}** moedas de ${remetente.toString()} para ${destinatario.toString()} não foi confirmada a tempo e expirou.`);
+                
+                const disabledButton = new ActionRowBuilder().addComponents(
+                    ButtonBuilder.from(row.components[0]).setDisabled(true).setLabel("Expirado")
+                );
+
+                message.edit({ embeds: [expiredEmbed], components: [disabledButton] });
+                pendingTransfers.delete(transactionId);
+            }
+        }, transferTimeLimit);
     }
 };
 
@@ -159,12 +180,7 @@ const statusCarteiraCommand = {
         .setName('status_carteira')
         .setDescription('Mostra suas estatísticas do evento de carteira perdida.'),
     async execute(interaction) {
-        let userData;
-        if (useFirebase()) {
-            userData = await getUserEconomyDataAsync(interaction.user.id, config.ECONOMY_FILE);
-        } else {
-            userData = getUserEconomyData(interaction.user.id, config.ECONOMY_FILE);
-        }
+        const userData = await getUserEconomyDataAsync(interaction.user.id, config.ECONOMY_FILE);
         
         const embed = new EmbedBuilder()
             .setTitle(`📊 Status de Carteiras de ${interaction.user.displayName}`)
@@ -187,12 +203,7 @@ const topcarteiraCommand = {
         .setName('topcarteira')
         .setDescription('Mostra o ranking de moedas do servidor.'),
     async execute(interaction) {
-        let economia;
-        if (useFirebase()) {
-            economia = await carregarDadosAsync(config.ECONOMY_FILE);
-        } else {
-            economia = carregarDados(config.ECONOMY_FILE);
-        }
+        const economia = await carregarDadosAsync(config.ECONOMY_FILE);
         
         if (!economia || Object.keys(economia).length === 0) {
             await interaction.reply("Ainda não há ninguém no ranking de carteiras!");
@@ -210,13 +221,9 @@ const topcarteiraCommand = {
             const [userId, data] = sortedWallets[i];
             try {
                 const member = await interaction.guild.members.fetch(userId);
-                const memberName = member.displayName;
-                
-                const rankEmoji = { 0: "🥇", 1: "🥈", 2: "🥉" }[i] || `**#${i + 1}**`;
-                description += `${rankEmoji} **${memberName}** - ${(data.carteira || 0).toLocaleString()} moedas\n`;
+                description += `**#${i + 1}** ${member.displayName} - ${(data.carteira || 0).toLocaleString()} moedas\n`;
             } catch (error) {
-                const rankEmoji = { 0: "🥇", 1: "🥈", 2: "🥉" }[i] || `**#${i + 1}**`;
-                description += `${rankEmoji} **ID: ${userId}** - ${(data.carteira || 0).toLocaleString()} moedas\n`;
+                description += `**#${i + 1}** *Membro Desconhecido (ID: ${userId})* - ${(data.carteira || 0).toLocaleString()} moedas\n`;
             }
         }
         
@@ -226,10 +233,10 @@ const topcarteiraCommand = {
 };
 
 module.exports = { 
+    pendingTransfers,
     carteiraCommand, 
     dailyCommand, 
     transferirCommand, 
     statusCarteiraCommand, 
     topcarteiraCommand 
 };
-
