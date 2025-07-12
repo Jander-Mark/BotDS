@@ -310,5 +310,5 @@ module.exports = {
     transferirCommand, 
     statusCarteiraCommand, 
     topcarteiraCommand,
-    historicoCarteiraCommand
+    historicoCarteiraCommand 
 };
