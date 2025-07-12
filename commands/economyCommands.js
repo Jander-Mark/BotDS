@@ -1,12 +1,13 @@
-const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags } = require('discord.js');
 const { 
-    carregarDadosAsync,
     getUserEconomyDataAsync,
-    updateUserDataAsync
+    updateUserDataAsync,
+    logTransaction,
+    getUserDataAsync,
+    carregarDadosAsync, // Adicionado para o topcarteira
+    HISTORICO_FILE
 } = require('../dataHandler');
 const config = require('../config');
-const fs = require('fs');
-const path = require('path');
 
 const pendingTransfers = new Map();
 
@@ -20,6 +21,9 @@ const carteiraCommand = {
                 .setRequired(false)
         ),
     async execute(interaction) {
+        // ADICIONADO: Deferir a resposta para evitar timeout
+        await interaction.deferReply();
+
         const targetUser = interaction.options.getUser('membro') || interaction.user;
         const userData = await getUserEconomyDataAsync(targetUser.id, config.ECONOMY_FILE);
         const saldo = userData.carteira || 0;
@@ -29,7 +33,8 @@ const carteiraCommand = {
             .setDescription(`Você possui **${saldo.toLocaleString()}** moedas furradas!`)
             .setColor(0xFFD700);
         
-        await interaction.reply({ embeds: [embed] });
+        // ALTERADO: de .reply para .editReply
+        await interaction.editReply({ embeds: [embed] });
     }
 };
 
@@ -38,6 +43,9 @@ const dailyCommand = {
         .setName('daily')
         .setDescription('Resgate suas 2000 moedas furradas diárias!'),
     async execute(interaction) {
+        // ADICIONADO: Deferir a resposta. O ephemeral será definido no editReply.
+        await interaction.deferReply({ ephemeral: true });
+
         const userId = interaction.user.id;
         const agora = new Date();
         const userData = await getUserEconomyDataAsync(userId, config.ECONOMY_FILE);
@@ -53,19 +61,26 @@ const dailyCommand = {
                 const horas = Math.floor(tempoRestante / (60 * 60 * 1000));
                 const minutos = Math.floor((tempoRestante % (60 * 60 * 1000)) / (60 * 1000));
                 
-                await interaction.reply({ 
-                    content: `Calma aí, apressadinho! Você precisa esperar mais **${horas}h e ${minutos}m** para resgatar novamente.`, 
-                    ephemeral: true 
+                // ALTERADO: para editReply. Já é ephemeral por causa do defer.
+                await interaction.editReply({ 
+                    content: `Calma aí, apressadinho! Você precisa esperar mais **${horas}h e ${minutos}m** para resgatar novamente.`
                 });
                 return;
             }
         }
 
-        userData.carteira = (userData.carteira || 0) + 2000;
+        const ganhoDaily = 2000;
+        userData.carteira = (userData.carteira || 0) + ganhoDaily;
         userData.ultimo_daily = agora.toISOString();
         await updateUserDataAsync(config.ECONOMY_FILE, userId, userData);
         
-        await interaction.reply("🎉 Você resgatou suas **2000** moedas furradas diárias! Volte em 24 horas.");
+        await logTransaction(userId, 'DAILY', ganhoDaily, 'Resgate diário');
+        
+        // ALTERADO: para editReply e removendo o ephemeral, tornando a resposta pública
+        await interaction.editReply({
+            content: `🎉 Você resgatou suas **${ganhoDaily.toLocaleString()}** moedas furradas diárias! Volte em 24 horas.`,
+            ephemeral: false
+        });
     }
 };
 
@@ -85,25 +100,31 @@ const transferirCommand = {
                 .setMinValue(1)
         ),
     async execute(interaction) {
+        // Este comando é mais complexo, a resposta inicial precisa ser imediata
+        // para pingar os usuários. A lógica de defer não se aplica da mesma forma.
+        // O getUserEconomyDataAsync aqui é uma checagem. Se ela demorar, pode dar erro.
+        // A correção principal nos outros comandos deve resolver a maior parte dos casos.
+        
+        await interaction.deferReply({ ephemeral: true }); // Deferir de forma efêmera para a checagem
+
         const remetente = interaction.user;
         const destinatario = interaction.options.getUser('membro');
         const quantia = interaction.options.getInteger('quantia');
 
         if (remetente.id === destinatario.id) {
-            await interaction.reply({ content: "❌ Você não pode transferir moedas para si mesmo!", ephemeral: true });
+            await interaction.editReply({ content: "❌ Você não pode transferir moedas para si mesmo!" });
             return;
         }
         if (destinatario.bot) {
-            await interaction.reply({ content: "❌ Você não pode transferir moedas para um bot!", ephemeral: true });
+            await interaction.editReply({ content: "❌ Você não pode transferir moedas para um bot!" });
             return;
         }
 
         const remetenteData = await getUserEconomyDataAsync(remetente.id, config.ECONOMY_FILE);
 
         if (remetenteData.carteira < quantia) {
-            await interaction.reply({ 
-                content: `❌ Você não tem moedas suficientes! Seu saldo é de ${remetenteData.carteira.toLocaleString()} moedas.`, 
-                ephemeral: true 
+            await interaction.editReply({ 
+                content: `❌ Você não tem moedas suficientes! Seu saldo é de ${remetenteData.carteira.toLocaleString()} moedas.`
             });
             return;
         }
@@ -134,17 +155,21 @@ const transferirCommand = {
                     .setEmoji('✔️')
             );
         
-        await interaction.reply({
+        // Enviando a mensagem pública
+        const message = await interaction.channel.send({
             content: `${remetente.toString()}, ${destinatario.toString()}`,
             embeds: [embed],
             components: [row]
         });
 
-        const message = await interaction.fetchReply();
+        // Editando a resposta inicial (deferida) para confirmar ao usuário que a ação foi enviada
+        await interaction.editReply({ content: 'Sua proposta de transferência foi enviada no canal!', ephemeral: true });
 
         pendingTransfers.set(transactionId, {
             remetenteId: remetente.id,
+            remetenteName: remetente.displayName,
             destinatarioId: destinatario.id,
+            destinatarioName: destinatario.displayName,
             quantia: quantia,
             accepted: new Set(),
             messageId: message.id,
@@ -154,15 +179,8 @@ const transferirCommand = {
         setTimeout(() => {
             const transfer = pendingTransfers.get(transactionId);
             if (transfer) {
-                const expiredEmbed = new EmbedBuilder()
-                    .setColor(0xED4245)
-                    .setTitle("🚫 Transferência Expirada")
-                    .setDescription(`A transferência de **${quantia.toLocaleString()}** moedas de ${remetente.toString()} para ${destinatario.toString()} não foi confirmada a tempo e expirou.`);
-                
-                const disabledButton = new ActionRowBuilder().addComponents(
-                    ButtonBuilder.from(row.components[0]).setDisabled(true).setLabel("Expirado")
-                );
-
+                const expiredEmbed = new EmbedBuilder().setColor(0xED4245).setTitle("🚫 Transferência Expirada").setDescription(`A transferência de **${quantia.toLocaleString()}** moedas de ${remetente.toString()} para ${destinatario.toString()} não foi confirmada a tempo e expirou.`);
+                const disabledButton = new ActionRowBuilder().addComponents(ButtonBuilder.from(row.components[0]).setDisabled(true).setLabel("Expirado"));
                 message.edit({ embeds: [expiredEmbed], components: [disabledButton] });
                 pendingTransfers.delete(transactionId);
             }
@@ -175,6 +193,7 @@ const statusCarteiraCommand = {
         .setName('status_carteira')
         .setDescription('Mostra suas estatísticas do evento de carteira perdida.'),
     async execute(interaction) {
+        await interaction.deferReply();
         const userData = await getUserEconomyDataAsync(interaction.user.id, config.ECONOMY_FILE);
         
         const embed = new EmbedBuilder()
@@ -189,7 +208,7 @@ const statusCarteiraCommand = {
                 { name: "🚓 Multas da Pawlice", value: `\`${(userData.perdas_policia || 0).toLocaleString()}\` moedas`, inline: true }
             );
         
-        await interaction.reply({ embeds: [embed] });
+        await interaction.editReply({ embeds: [embed] });
     }
 };
 
@@ -198,10 +217,11 @@ const topcarteiraCommand = {
         .setName('topcarteira')
         .setDescription('Mostra o ranking de moedas do servidor.'),
     async execute(interaction) {
+        await interaction.deferReply();
         const economia = await carregarDadosAsync(config.ECONOMY_FILE);
         
         if (!economia || Object.keys(economia).length === 0) {
-            await interaction.reply("Ainda não há ninguém no ranking de carteiras!");
+            await interaction.editReply("Ainda não há ninguém no ranking de carteiras!");
             return;
         }
         
@@ -221,9 +241,7 @@ const topcarteiraCommand = {
             try {
                 const member = await interaction.guild.members.fetch(userId);
                 description += `**#${i + 1}** ${member.displayName} - ${(data.carteira || 0).toLocaleString()} moedas\n`;
-            } catch (error) {
-                // Não mostra membros que saíram do servidor
-            }
+            } catch (error) { /* Ignora membros que saíram */ }
         }
         
         if (!description) {
@@ -231,64 +249,57 @@ const topcarteiraCommand = {
         }
 
         embed.setDescription(description);
-        await interaction.reply({ embeds: [embed] });
+        await interaction.editReply({ embeds: [embed] });
     }
 };
 
-const historicoCommand = {
+const historicoCarteiraCommand = {
     data: new SlashCommandBuilder()
-        .setName('historico')
-        .setDescription('Mostra seu histórico de transferências.')
+        .setName('historico_carteira')
+        .setDescription('Mostra o histórico de transações da sua carteira.')
         .addUserOption(option =>
             option.setName('membro')
                 .setDescription('Ver o histórico de outro membro (apenas para staff)')
                 .setRequired(false)
         ),
     async execute(interaction) {
+        // Deferir de forma efêmera pois a resposta final é efêmera
+        await interaction.deferReply({ ephemeral: true });
+
         const targetUser = interaction.options.getUser('membro') || interaction.user;
 
-        // Verifica se o autor da interação é staff se estiver tentando ver o histórico de outra pessoa
         if (targetUser.id !== interaction.user.id && !interaction.member.roles.cache.has(config.STAFF_ROLE_ID)) {
-            await interaction.reply({ content: "❌ Você só pode ver o seu próprio histórico.", ephemeral: true });
+            await interaction.editReply({ content: "❌ Você só pode ver o seu próprio histórico." });
             return;
         }
 
-        const logFile = path.join(__dirname, '..', 'logs', 'transferencias.json');
-        if (!fs.existsSync(logFile)) {
-            await interaction.reply({ content: "Nenhuma transferência foi registrada no servidor ainda.", ephemeral: true });
-            return;
-        }
-
-        const logs = JSON.parse(fs.readFileSync(logFile, 'utf8'));
-        const userTransactions = logs.transferencias
-            .filter(t => t.remetente === targetUser.id || t.destinatario === targetUser.id)
-            .slice(0, 10); // Pega as últimas 10 transações
+        const historicoData = await getUserDataAsync(HISTORICO_FILE, targetUser.id);
+        const userTransactions = historicoData.transacoes || [];
 
         if (userTransactions.length === 0) {
-            await interaction.reply({ content: "Você ainda não tem nenhuma transferência no seu histórico.", ephemeral: true });
+            await interaction.editReply({ content: "Nenhuma transação encontrada no seu histórico." });
             return;
         }
 
         const embed = new EmbedBuilder()
-            .setTitle(`📜 Histórico de Transferências de ${targetUser.displayName}`)
+            .setTitle(`📜 Histórico da Carteira de ${targetUser.displayName}`)
             .setColor(0x3498DB)
-            .setDescription("Mostrando suas últimas 10 transações.");
+            .setDescription("Mostrando as últimas 15 transações.");
 
-        for (const t of userTransactions) {
+        const recentTransactions = userTransactions.slice(0, 15);
+
+        for (const t of recentTransactions) {
             const timestamp = Math.floor(new Date(t.timestamp).getTime() / 1000);
-            let description, color;
+            const emoji = t.quantia > 0 ? '🟢' : '🔴';
+            const quantiaStr = `${t.quantia > 0 ? '+' : ''}${t.quantia.toLocaleString()}`;
 
-            if (t.remetente === targetUser.id) {
-                description = `**Enviou ${t.quantia.toLocaleString()} moedas** para <@${t.destinatario}>`;
-                color = "🔴";
-            } else {
-                description = `**Recebeu ${t.quantia.toLocaleString()} moedas** de <@${t.remetente}>`;
-                color = "🟢";
-            }
-            embed.addFields({ name: `${color} <t:${timestamp}:R>`, value: description });
+            embed.addFields({ 
+                name: `${emoji} ${quantiaStr} moedas | <t:${timestamp}:R>`, 
+                value: t.descricao 
+            });
         }
         
-        await interaction.reply({ embeds: [embed], ephemeral: true });
+        await interaction.editReply({ embeds: [embed] });
     }
 };
 
@@ -299,5 +310,5 @@ module.exports = {
     transferirCommand, 
     statusCarteiraCommand, 
     topcarteiraCommand,
-    historicoCommand
+    historicoCarteiraCommand
 };
