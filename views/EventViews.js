@@ -3,7 +3,8 @@ const config = require("../config");
 const { 
     getUserEconomyDataAsync,
     updateUserDataAsync,
-    incrementUserFieldAsync
+    incrementUserFieldAsync,
+    logTransaction // <--- Importado aqui
 } = require("../dataHandler");
 
 // --- LÓGICA DO EVENTO DE CARTEIRA PERDIDA (VERSÃO PÚBLICA) ---
@@ -65,7 +66,7 @@ class CarteiraPerdidaView {
         await updateUserDataAsync(config.ECONOMY_FILE, userId, { carteiras_devolvidas: 0 });
 
         // 2. Verifica e remove o cargo "Bom Samaritano"
-        const bomSamaritanoRoleId = config.BOM_SAMARITANO_ROLE_ID;
+        const bomSamaritanoRoleId = config.GOOD_SAMARITAN_ROLE_ID;
         let cargoRemovido = false;
         if (bomSamaritanoRoleId && interaction.member.roles.cache.has(bomSamaritanoRoleId)) {
             try {
@@ -89,6 +90,7 @@ class CarteiraPerdidaView {
             const ganhos = 10000;
             await incrementUserFieldAsync(config.ECONOMY_FILE, userId, 'carteira', ganhos);
             await incrementUserFieldAsync(config.ECONOMY_FILE, userId, 'ganhos_pegando', ganhos);
+            await logTransaction(userId, 'WALLET_TREASURE', ganhos, 'Encontrou um tesouro na carteira perdida');
             embed = new EmbedBuilder()
                 .setTitle("🎉 DIA DE SORTE!")
                 .setDescription(`**${interaction.user.displayName}** pegou a carteira e encontrou um tesouro!\n\nEle(a) ganhou **${ganhos.toLocaleString()}** moedas furradas!`)
@@ -97,6 +99,7 @@ class CarteiraPerdidaView {
             const perda = Math.floor(Math.random() * 251) + 100;
             await incrementUserFieldAsync(config.ECONOMY_FILE, userId, 'carteira', -perda);
             await incrementUserFieldAsync(config.ECONOMY_FILE, userId, 'perdas_policia', perda);
+            await logTransaction(userId, 'WALLET_FINE', -perda, 'Multado pela Pawlice ao pegar carteira');
             embed = new EmbedBuilder()
                 .setTitle("🚓 MÃOS AO ALTO!")
                 .setDescription(`A **Pawlice** pegou **${interaction.user.displayName}** no flagra!\n\nComo multa, ele(a) perdeu **${perda.toLocaleString()}** moedas furradas.`)
@@ -137,6 +140,8 @@ class CarteiraPerdidaView {
         await incrementUserFieldAsync(config.ECONOMY_FILE, userId, 'carteira', ganhos);
         await incrementUserFieldAsync(config.ECONOMY_FILE, userId, 'ganhos_devolvendo', ganhos);
         await incrementUserFieldAsync(config.ECONOMY_FILE, userId, 'carteiras_devolvidas', 1);
+        
+        await logTransaction(userId, 'WALLET_REWARD', ganhos, 'Recompensa por devolver carteira');
 
         // Busca os dados atualizados para exibir o total e verificar o cargo
         const userData = await getUserEconomyDataAsync(userId, config.ECONOMY_FILE);
@@ -147,7 +152,7 @@ class CarteiraPerdidaView {
             .setDescription(`**${interaction.user.displayName}** foi honesto(a) e devolveu a carteira!\n\nComo recompensa, ele(a) ganhou **${ganhos.toLocaleString()}** moedas furradas!\n\n*Total de carteiras devolvidas: ${totalDevolvido}*`)
             .setColor(0x00FF00);
 
-        const bomSamaritanoRoleId = config.BOM_SAMARITANO_ROLE_ID;
+        const bomSamaritanoRoleId = config.GOOD_SAMARITAN_ROLE_ID;
         if (bomSamaritanoRoleId && totalDevolvido >= 50 && !interaction.member.roles.cache.has(bomSamaritanoRoleId)) {
             try {
                 const bomSamaritanoRole = await interaction.guild.roles.fetch(bomSamaritanoRoleId);
@@ -225,6 +230,10 @@ class CristalMisteriosoView {
         await this.handleInteraction(interaction, async () => {
             const ganhos = Math.random() < 0.20 ? 1500 : 500;
             await incrementUserFieldAsync(config.ECONOMY_FILE, interaction.user.id, 'carteira', ganhos);
+            
+            // Log da venda do cristal
+            await logTransaction(interaction.user.id, 'CRYSTAL_SELL', ganhos, 'Venda de cristal misterioso');
+
             const embed = new EmbedBuilder().setTitle("💎 Venda Realizada!").setDescription(`**${interaction.user.displayName}** vendeu o cristal e ganhou **${ganhos.toLocaleString()}** moedas!`).setColor(0x0000FF);
             await this.handlePublicUpdate(interaction, embed);
         });
