@@ -2,12 +2,11 @@ const { Events, ActionRowBuilder, ButtonBuilder, EmbedBuilder } = require('disco
 const { LojaView, ItemSelect } = require('../views/LojaView');
 const { CarteiraPerdidaView, CristalMisteriosoView } = require('../views/EventViews');
 const PainelDeControle = require('../views/PainelDeControle');
-const { getUserEconomyDataAsync, updateUserDataAsync } = require('../dataHandler');
+const { getUserEconomyDataAsync, updateUserDataAsync, logTransfer } = require('../dataHandler');
 const config = require('../config');
-
-// Importa o Map de transferências pendentes
 const { pendingTransfers } = require('../commands/economyCommands');
 
+// Mapas para gerenciar instâncias de views de eventos
 const carteiraPerdidaViews = new Map();
 const cristalMisteriosoViews = new Map();
 
@@ -15,7 +14,7 @@ module.exports = {
     name: Events.InteractionCreate,
     async execute(interaction) {
         try {
-            // --- Handlers de Comandos ---
+            // Handler para Comandos de Barra (/)
             if (interaction.isChatInputCommand()) {
                 const command = interaction.client.commands.get(interaction.commandName);
                 if (!command) {
@@ -26,7 +25,7 @@ module.exports = {
                 return;
             } 
             
-            // --- Handlers de Menus de Seleção ---
+            // Handler para Menus de Seleção (Dropdowns)
             if (interaction.isStringSelectMenu()) {
                 if (interaction.customId.startsWith('shop_category_')) {
                     const category = interaction.customId.replace('shop_category_', '');
@@ -37,11 +36,41 @@ module.exports = {
                 return;
             } 
             
-            // --- Handlers de Botões ---
+            // Handler para Botões
             if (interaction.isButton()) {
                 const customId = interaction.customId;
 
-                // --- Lógica da Loja ---
+                // --- LÓGICA DO PAINEL DE CONTROLE ---
+                if (customId.startsWith('boas_vindas_') || customId.startsWith('expulsar_') || customId.startsWith('banir_')) {
+                    const parts = customId.split('_');
+                    const memberId = parts.pop(); 
+                    const action = parts.join('_');
+
+                    const member = await interaction.guild.members.fetch(memberId).catch(() => null);
+
+                    if (member) {
+                        const painelDeControle = new PainelDeControle(member);
+                        switch (action) {
+                            case 'boas_vindas':
+                                await painelDeControle.handleBoasVindas(interaction);
+                                break;
+                            case 'expulsar':
+                                await painelDeControle.handleExpulsar(interaction);
+                                break;
+                            case 'banir':
+                                await painelDeControle.handleBanir(interaction);
+                                break;
+                        }
+                    } else {
+                        await interaction.reply({ content: "Membro não encontrado ou já saiu do servidor.", ephemeral: true });
+                        const newRow = ActionRowBuilder.from(interaction.message.components[0]);
+                        newRow.components.forEach(c => c.setDisabled(true).setLabel("Expirado"));
+                        await interaction.message.edit({ components: [newRow] });
+                    }
+                    return;
+                }
+
+                // --- Lógica para os botões da Loja ---
                 if (customId.startsWith('cat_')) {
                     const lojaView = new LojaView();
                     if (customId === 'cat_funcoes_persist') await lojaView.handleFuncoes(interaction);
@@ -50,25 +79,9 @@ module.exports = {
                     return;
                 }
 
-                // --- Lógica do Painel de Controle de Membro ---
-                if (customId.startsWith('ban_') || customId.startsWith('kick_') || customId.startsWith('boas_vindas')) {
-                    const userId = customId.split('_')[1];
-                    const member = await interaction.guild.members.fetch(userId).catch(() => null);
-                    if (member) {
-                        const painel = new PainelDeControle(member);
-                        if (customId.startsWith('ban_')) await painel.handleBanir(interaction);
-                        else if (customId.startsWith('kick_')) await painel.handleExpulsar(interaction);
-                        else await painel.handleBoasVindas(interaction);
-                    } else {
-                        await interaction.reply({ content: "Membro não encontrado.", ephemeral: true });
-                    }
-                    return;
-                }
-
-                // --- Lógica dos Eventos ---
+                // --- Lógica para Eventos (Carteira e Cristal) ---
                 const messageId = interaction.message.id;
-
-                // Carteira Perdida
+                
                 if (customId.startsWith('pegar_carteira') || customId.startsWith('devolver_carteira')) {
                     if (!carteiraPerdidaViews.has(messageId)) carteiraPerdidaViews.set(messageId, new CarteiraPerdidaView());
                     const view = carteiraPerdidaViews.get(messageId);
@@ -77,8 +90,7 @@ module.exports = {
                     setTimeout(() => carteiraPerdidaViews.delete(messageId), 200000); 
                     return;
                 }
-
-                // Cristal Misterioso
+                
                 if (customId.includes('_cristal_')) {
                     if (!cristalMisteriosoViews.has(messageId)) cristalMisteriosoViews.set(messageId, new CristalMisteriosoView());
                     const view = cristalMisteriosoViews.get(messageId);
@@ -89,15 +101,13 @@ module.exports = {
                     return;
                 }
 
-                // --- LÓGICA PARA CONFIRMAÇÃO DE TRANSFERÊNCIA ---
+                // --- LÓGICA PARA CONFIRMAÇÃO DE TRANSFERÊNCIA (CORRIGIDA) ---
                 if (customId.startsWith('accept_transfer_')) {
                     const transactionId = customId.replace('accept_transfer_', '');
                     const transfer = pendingTransfers.get(transactionId);
 
                     if (!transfer) {
                         await interaction.reply({ content: "Esta transferência não é mais válida ou já foi concluída.", ephemeral: true });
-                        const disabledButton = ButtonBuilder.from(interaction.component).setDisabled(true).setLabel("Inválido");
-                        await interaction.message.edit({ components: [new ActionRowBuilder().addComponents(disabledButton)] });
                         return;
                     }
 
@@ -122,20 +132,25 @@ module.exports = {
 
                     if (accepted.size === 2) {
                         const remetenteData = await getUserEconomyDataAsync(remetenteId, config.ECONOMY_FILE);
-                        const destinatarioData = await getUserEconomyDataAsync(destinatarioId, config.ECONOMY_FILE);
-
+                        
                         if (remetenteData.carteira < quantia) {
                             const failedEmbed = new EmbedBuilder().setColor(0xED4245).setTitle("❌ Transferência Falhou").setDescription(`A transferência falhou porque <@${remetenteId}> não possui mais a quantia necessária.`);
-                            await interaction.message.edit({ embeds: [failedEmbed], components: [new ActionRowBuilder().addComponents(ButtonBuilder.from(newButton.components[0]).setDisabled(true).setLabel("Falhou"))] });
+                            await interaction.message.edit({ content: "", embeds: [failedEmbed], components: [new ActionRowBuilder().addComponents(ButtonBuilder.from(newButton.components[0]).setDisabled(true).setLabel("Falhou"))] });
                             pendingTransfers.delete(transactionId);
                             return;
                         }
 
+                        // Atualiza o saldo do remetente
                         remetenteData.carteira -= quantia;
+                        await updateUserDataAsync(config.ECONOMY_FILE, remetenteId, remetenteData);
+                        
+                        // Atualiza o saldo do destinatário
+                        const destinatarioData = await getUserEconomyDataAsync(destinatarioId, config.ECONOMY_FILE);
                         destinatarioData.carteira += quantia;
-
-                        await updateUserDataAsync(config.ECONOMY_FILE, remetenteId, { carteira: remetenteData.carteira });
-                        await updateUserDataAsync(config.ECONOMY_FILE, destinatarioId, { carteira: destinatarioData.carteira });
+                        await updateUserDataAsync(config.ECONOMY_FILE, destinatarioId, destinatarioData);
+                        
+                        // Registra a transação no log
+                        logTransfer(remetenteId, destinatarioId, quantia);
                         
                         const successEmbed = new EmbedBuilder()
                             .setColor(0x57F287)
@@ -152,7 +167,7 @@ module.exports = {
             }
         } catch (error) {
             console.error(`Erro ao processar interação:`, error);
-            if (interaction.deferred || interaction.replied) {
+            if (interaction.replied || interaction.deferred) {
                 await interaction.followUp({ content: 'Ocorreu um erro ao executar esta ação!', ephemeral: true });
             } else {
                 await interaction.reply({ content: 'Ocorreu um erro ao executar esta ação!', ephemeral: true });
