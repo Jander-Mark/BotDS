@@ -2,7 +2,7 @@ const { Events, ActionRowBuilder, ButtonBuilder, EmbedBuilder } = require('disco
 const { LojaView, ItemSelect } = require('../views/LojaView');
 const { CarteiraPerdidaView, CristalMisteriosoView } = require('../views/EventViews');
 const PainelDeControle = require('../views/PainelDeControle');
-const { getUserEconomyDataAsync, updateUserDataAsync, logTransfer } = require('../dataHandler');
+const { getUserEconomyDataAsync, updateUserDataAsync, logTransaction } = require('../dataHandler');
 const config = require('../config');
 const { pendingTransfers } = require('../commands/economyCommands');
 
@@ -101,7 +101,7 @@ module.exports = {
                     return;
                 }
 
-                // --- LÓGICA PARA CONFIRMAÇÃO DE TRANSFERÊNCIA (CORRIGIDA) ---
+                // --- LÓGICA PARA CONFIRMAÇÃO DE TRANSFERÊNCIA ---
                 if (customId.startsWith('accept_transfer_')) {
                     const transactionId = customId.replace('accept_transfer_', '');
                     const transfer = pendingTransfers.get(transactionId);
@@ -111,7 +111,7 @@ module.exports = {
                         return;
                     }
 
-                    const { remetenteId, destinatarioId, quantia, accepted } = transfer;
+                    const { remetenteId, remetenteName, destinatarioId, destinatarioName, quantia, accepted } = transfer;
 
                     if (interaction.user.id !== remetenteId && interaction.user.id !== destinatarioId) {
                         await interaction.reply({ content: "Você não faz parte desta transação.", ephemeral: true });
@@ -140,17 +140,14 @@ module.exports = {
                             return;
                         }
 
-                        // Atualiza o saldo do remetente
-                        remetenteData.carteira -= quantia;
-                        await updateUserDataAsync(config.ECONOMY_FILE, remetenteId, remetenteData);
-                        
-                        // Atualiza o saldo do destinatário
+                        // Atualiza saldos
+                        await updateUserDataAsync(config.ECONOMY_FILE, remetenteId, { carteira: remetenteData.carteira - quantia });
                         const destinatarioData = await getUserEconomyDataAsync(destinatarioId, config.ECONOMY_FILE);
-                        destinatarioData.carteira += quantia;
-                        await updateUserDataAsync(config.ECONOMY_FILE, destinatarioId, destinatarioData);
+                        await updateUserDataAsync(config.ECONOMY_FILE, destinatarioId, { carteira: destinatarioData.carteira + quantia });
                         
-                        // Registra a transação no log
-                        logTransfer(remetenteId, destinatarioId, quantia);
+                        // Registra a transação para ambos
+                        await logTransaction(remetenteId, 'TRANSFER_SENT', -quantia, `Transferência para ${destinatarioName}`, destinatarioId);
+                        await logTransaction(destinatarioId, 'TRANSFER_RECEIVED', quantia, `Transferência de ${remetenteName}`, remetenteId);
                         
                         const successEmbed = new EmbedBuilder()
                             .setColor(0x57F287)
