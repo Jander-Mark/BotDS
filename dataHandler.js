@@ -1,4 +1,5 @@
 const fs = require('fs');
+const path = require('path'); // Adicionado para lidar com caminhos de arquivo
 const firebaseHandler = require('./firebaseHandler');
 
 // Flag para determinar se usar Firebase ou JSON local
@@ -15,7 +16,8 @@ function carregarDados(arquivo) {
     if (!fs.existsSync(arquivo)) return {};
     try {
         const data = fs.readFileSync(arquivo, 'utf8');
-        return JSON.parse(data);
+        // Retorna um objeto vazio se o arquivo estiver vazio para evitar erros de JSON.parse
+        return data ? JSON.parse(data) : {};
     } catch (error) {
         console.error(`Erro ao carregar dados de ${arquivo}:`, error);
         return {};
@@ -24,15 +26,47 @@ function carregarDados(arquivo) {
 
 function salvarDados(arquivo, data) {
     try {
+        const dir = path.dirname(arquivo);
+        // Cria o diretório (ex: 'logs') se ele não existir
+        if (!fs.existsSync(dir)) {
+            fs.mkdirSync(dir, { recursive: true });
+        }
         fs.writeFileSync(arquivo, JSON.stringify(data, null, 4), 'utf8');
     } catch (error) {
         console.error(`Erro ao salvar dados em ${arquivo}:`, error);
     }
 }
 
+// ------------------- LÓGICA DE LOG DE TRANSFERÊNCIAS -------------------
+
+/**
+ * Registra uma transferência em um arquivo de log.
+ * @param {string} remetenteId 
+ * @param {string} destinatarioId 
+ * @param {number} quantia 
+ */
+function logTransfer(remetenteId, destinatarioId, quantia) {
+    const logFile = path.join(__dirname, '..', 'logs', 'transferencias.json');
+    const logs = carregarDados(logFile);
+
+    const logEntry = {
+        id: `T${Date.now()}${Math.random().toString(36).substring(2, 6)}`,
+        remetente: remetenteId,
+        destinatario: destinatarioId,
+        quantia: quantia,
+        timestamp: new Date().toISOString()
+    };
+
+    if (!logs.transferencias) {
+        logs.transferencias = [];
+    }
+
+    logs.transferencias.unshift(logEntry); // Adiciona a transação mais recente no início
+    salvarDados(logFile, logs);
+}
+
 // ------------------- FUNÇÕES PARA FIREBASE -------------------
 
-// Mapear nomes de arquivos para coleções do Firebase
 const COLLECTION_MAPPING = {
     'economia.json': 'economia',
     'xp_data.json': 'xp_data',
@@ -44,7 +78,6 @@ function getCollectionName(arquivo) {
     return COLLECTION_MAPPING[arquivo] || arquivo.replace('.json', '');
 }
 
-// Função unificada para carregar dados (Firebase ou JSON)
 async function carregarDadosAsync(arquivo) {
     if (useFirebase) {
         try {
@@ -52,7 +85,6 @@ async function carregarDadosAsync(arquivo) {
             return await firebaseHandler.getAllDocuments(collectionName);
         } catch (error) {
             console.error(`Erro ao carregar dados do Firebase (${arquivo}):`, error);
-            // Fallback para JSON local
             return carregarDados(arquivo);
         }
     } else {
@@ -60,14 +92,12 @@ async function carregarDadosAsync(arquivo) {
     }
 }
 
-// Função unificada para salvar dados (Firebase ou JSON)
 async function salvarDadosAsync(arquivo, data) {
     if (useFirebase) {
         try {
             const collectionName = getCollectionName(arquivo);
             const batch = firebaseHandler.createBatch();
             
-            // Salvar cada usuário como um documento separado
             for (const [userId, userData] of Object.entries(data)) {
                 const docRef = firebaseHandler.getCollection(collectionName).doc(userId);
                 batch.set(docRef, userData, { merge: true });
@@ -77,7 +107,6 @@ async function salvarDadosAsync(arquivo, data) {
             return true;
         } catch (error) {
             console.error(`Erro ao salvar dados no Firebase (${arquivo}):`, error);
-            // Fallback para JSON local
             salvarDados(arquivo, data);
             return false;
         }
@@ -87,7 +116,6 @@ async function salvarDadosAsync(arquivo, data) {
     }
 }
 
-// Função para obter dados de um usuário específico
 async function getUserDataAsync(arquivo, userId) {
     if (useFirebase) {
         try {
@@ -96,7 +124,6 @@ async function getUserDataAsync(arquivo, userId) {
             return userData || {};
         } catch (error) {
             console.error(`Erro ao obter dados do usuário ${userId} do Firebase:`, error);
-            // Fallback para JSON local
             const data = carregarDados(arquivo);
             return data[userId.toString()] || {};
         }
@@ -106,7 +133,6 @@ async function getUserDataAsync(arquivo, userId) {
     }
 }
 
-// Função para salvar dados de um usuário específico
 async function setUserDataAsync(arquivo, userId, userData) {
     if (useFirebase) {
         try {
@@ -115,7 +141,6 @@ async function setUserDataAsync(arquivo, userId, userData) {
             return true;
         } catch (error) {
             console.error(`Erro ao salvar dados do usuário ${userId} no Firebase:`, error);
-            // Fallback para JSON local
             const data = carregarDados(arquivo);
             data[userId.toString()] = userData;
             salvarDados(arquivo, data);
@@ -129,30 +154,24 @@ async function setUserDataAsync(arquivo, userId, userData) {
     }
 }
 
-// Função para atualizar dados de um usuário específico
 async function updateUserDataAsync(arquivo, userId, updateData) {
     if (useFirebase) {
         try {
             const collectionName = getCollectionName(arquivo);
-            await firebaseHandler.updateDocument(collectionName, userId.toString(), updateData);
-            return true;
+            await firebaseHandler.setDocument(collectionName, userId.toString(), updateData, { merge: true });
         } catch (error) {
             console.error(`Erro ao atualizar dados do usuário ${userId} no Firebase:`, error);
-            // Fallback para JSON local
             const data = carregarDados(arquivo);
             data[userId.toString()] = { ...data[userId.toString()], ...updateData };
             salvarDados(arquivo, data);
-            return false;
         }
     } else {
         const data = carregarDados(arquivo);
         data[userId.toString()] = { ...data[userId.toString()], ...updateData };
         salvarDados(arquivo, data);
-        return true;
     }
 }
 
-// Função para incrementar um campo numérico
 async function incrementUserFieldAsync(arquivo, userId, field, incrementValue = 1) {
     if (useFirebase) {
         try {
@@ -161,7 +180,6 @@ async function incrementUserFieldAsync(arquivo, userId, field, incrementValue = 
             return true;
         } catch (error) {
             console.error(`Erro ao incrementar campo ${field} do usuário ${userId} no Firebase:`, error);
-            // Fallback para JSON local
             const data = carregarDados(arquivo);
             if (!data[userId.toString()]) data[userId.toString()] = {};
             data[userId.toString()][field] = (data[userId.toString()][field] || 0) + incrementValue;
@@ -181,7 +199,6 @@ async function incrementUserFieldAsync(arquivo, userId, field, incrementValue = 
 async function getUserEconomyData(userId, economyFile) {
     const userData = await getUserDataAsync(economyFile, userId);
     
-    // Garantir que todos os campos necessários existam
     const defaultData = {
         carteira: 0,
         ultimo_daily: null,
@@ -201,7 +218,6 @@ async function getUserEconomyData(userId, economyFile) {
 async function getUserXpData(userId, xpFile) {
     const userData = await getUserDataAsync(xpFile, userId);
     
-    // Garantir que todos os campos necessários existam
     const defaultData = {
         xp: 0,
         level: 0,
@@ -214,7 +230,6 @@ async function getUserXpData(userId, xpFile) {
 }
 
 // ------------------- FUNÇÕES DE COMPATIBILIDADE (SÍNCRONAS) -------------------
-// Estas funções mantêm compatibilidade com o código existente
 function getUserEconomyDataSync(userId, economyFile) {
     const economia = carregarDados(economyFile);
     const userIdStr = userId.toString();
@@ -250,34 +265,17 @@ function getUserXpDataSync(userId, xpFile) {
     return xpData[userIdStr];
 }
 
-/**
- * Calcula o XP total necessário para atingir um determinado nível.
- * @param {number} level - O nível.
- * @returns {number} O XP total necessário.
- */
 function calculateXpForLevel(level) {
     if (level < 1) return 0;
     return 25 * (level * level) + 50 * level;
 }
 
-/**
- * Calcula o nível de um usuário com base em seu XP total.
- * Inverso de calculateXpForLevel.
- * @param {number} xp - O XP total do usuário.
- * @returns {number} O nível calculado.
- */
 function calculateLevelForXp(xp) {
     if (xp <= 0) return 0;
-    // Fórmula matemática para encontrar L: L = (sqrt(2500 + 100 * XP) - 50) / 50
     const level = Math.floor((Math.sqrt(2500 + 100 * xp) - 50) / 50);
     return Math.max(0, level);
 }
 
-/**
- * Atualiza o nível de um usuário com base em seu XP atual e retorna os dados atualizados.
- * @param {object} userData - O objeto de dados de XP do usuário.
- * @returns {object} O objeto de dados de XP atualizado com o nível correto.
- */
 function updateUserLevel(userData) {
     const newLevel = calculateLevelForXp(userData.xp);
     if (newLevel !== userData.level) {
@@ -287,16 +285,12 @@ function updateUserLevel(userData) {
 }
 
 module.exports = {
-    // Inicialização
     initializeDataHandler,
-    
-    // Funções síncronas (compatibilidade)
     carregarDados,
     salvarDados,
+    logTransfer, // <-- Exportando a nova função
     getUserEconomyData: getUserEconomyDataSync,
     getUserXpData: getUserXpDataSync,
-    
-    // Funções assíncronas (Firebase)
     carregarDadosAsync,
     salvarDadosAsync,
     getUserDataAsync,
@@ -305,12 +299,8 @@ module.exports = {
     incrementUserFieldAsync,
     getUserEconomyDataAsync: getUserEconomyData,
     getUserXpDataAsync: getUserXpData,
-    
-    // Utilitários
     useFirebase: () => useFirebase,
     getCollectionName,
-
-    // Funções de XP e Nível
     calculateXpForLevel,
     calculateLevelForXp,
     updateUserLevel
